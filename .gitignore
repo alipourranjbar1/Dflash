@@ -1,0 +1,14 @@
+rust/
+vllm/vllm/vllm_flash_attn/
+docs/
+tests/
+benchmarks/
+vllm.egg-info/
+.deps/
+__pycache__/
+*.pyc
+*.so
+*.abi3.so
+build/
+dist/
+.gitmodules
