@@ -1,0 +1,214 @@
+# Contributing to Speculators
+
+Thank you for considering contributing to Speculators! We welcome contributions from the community to help improve and grow this project. This document outlines the process and guidelines for contributing.
+
+## Claiming Work
+
+**We value your time and want to ensure your contributions have the greatest impact.**
+
+To make the contribution process as smooth as possible, we ask that you coordinate with maintainers before diving into significant changes. This helps us:
+
+- **Avoid duplicate effort** if someone else is already working on a similar solution.
+- **Align on architecture** early on so your PR can be merged quickly.
+- **Protect your time** by ensuring the proposed change fits the project’s long-term roadmap.
+
+### How to Get Started
+
+1. **Find or create an issue:** Check if your idea is already being discussed. If not, open a new issue to propose the change.
+2. **Start a conversation:** Comment on the issue to let us know you’re interested! A brief outline of your planned approach is always helpful.
+3. **Wait for the "Green Light":** A maintainer will assign the issue to you. This is our signal that the approach looks good and the "floor is yours."
+4. **Build away:** Once assigned, you’re all set to begin implementation.
+
+### When should you check in?
+
+| **Let's chat first if...**                      | **Feel free to dive right in for...**   |
+| :---------------------------------------------- | :-------------------------------------- |
+| Adding new training algorithms or model support | Fixing typos or improving documentation |
+| Modifying the data pipeline or CLI/API          | Small bug fixes (generally < 20 lines)  |
+| Large refactors or performance optimizations    | Adding missing type annotations         |
+| Changes affecting 3+ files                      | Minor dependency updates                |
+
+*Maintainers typically respond in 2-3 business days. If you haven’t heard from us after a week, please feel free to give the thread a nudge!*
+
+## How Can You Contribute?
+
+There are many ways to contribute to Speculators:
+
+- **Reporting Bugs**: If you encounter a bug, please let us know by creating an issue.
+- **Suggesting Features**: Have an idea for a new feature? Open an issue to discuss it.
+- **Improving Documentation**: Help us improve our documentation by submitting pull requests.
+- **Writing Code**: Contribute code to fix bugs, add features, or improve performance.
+- **Reviewing Pull Requests**: Provide feedback on open pull requests to help maintain code quality.
+
+## Getting Started
+
+### Prerequisites
+
+Before contributing, ensure you have the following installed:
+
+- Python 3.10 or higher
+- pip (Python package manager)
+- Git
+
+### Setting Up the Repository
+
+You can either clone the repository directly or fork it if you plan to contribute changes back:
+
+#### Option 1: Cloning the Repository
+
+1. Clone the repository to your local machine:
+
+   ```bash
+   git clone https://github.com/vllm-project/speculators.git
+   cd speculators
+   ```
+
+#### Option 2: Forking the Repository
+
+1. Fork the repository by clicking the "Fork" button on the repository's GitHub page.
+
+2. Clone your forked repository to your local machine:
+
+   ```bash
+   git clone https://github.com/<your-username>/speculators.git
+   cd speculators
+   ```
+
+### Installing Dependencies
+
+To install the required dependencies for the package and development, run:
+
+```bash
+pip install -e .[dev]
+```
+
+The `-e` flag installs the package in editable mode, allowing you to make changes to the code without reinstalling it. The `[dev]` part installs additional dependencies needed for development, such as testing and linting tools.
+
+## Code Style and Guidelines
+
+We follow strict coding standards to ensure code quality and maintainability. Please adhere to the following guidelines:
+
+- **Code Style**: Use [Ruff](https://github.com/astral-sh/ruff) for formatting and linting.
+- **Type Checking**: Use [Mypy](https://mypy-lang.org/) for type checking.
+- **Testing**: Write unit tests for new features and bug fixes. Use [pytest](https://docs.pytest.org/) for testing.
+- **Documentation**: Update documentation for any changes to the codebase.
+
+To ensure consistency and quality of the codebase, we use [ruff](https://github.com/astral-sh/ruff) for linting and styling, [mypy](https://github.com/python/mypy) for type checking, and [mdformat](https://github.com/hukkin/mdformat) for formatting Markdown files.
+
+### Code Quality and Style
+
+To run all quality checks (linting, formatting, type checking):
+
+```bash
+make quality
+```
+
+To automatically fix style issues, use:
+
+```bash
+make style
+```
+
+## Running Tests
+
+For testing, we use [pytest](https://docs.pytest.org/) as our testing framework. We have different test suites for unit tests, integration tests, and end-to-end tests.
+
+### Running All Tests
+
+To run all tests:
+
+```bash
+python -m pytest tests/
+```
+
+### Running Specific Tests
+
+- Unit tests (focused on individual components with mocking):
+
+  ```bash
+  python -m pytest tests/unit
+  ```
+
+- Integration tests (focused on interactions between components ideally without mocking):
+
+  ```bash
+  python -m pytest tests/integration
+  ```
+
+- End-to-end tests (focused on the entire system and user interfaces):
+
+  ```bash
+  python -m pytest tests/e2e
+  ```
+
+### Running Tests with Coverage
+
+To ensure your changes are covered by tests, run:
+
+```bash
+python -m pytest tests/unit --cov=speculators --cov-report=html
+```
+
+Review the coverage report to confirm that your new code is adequately tested.
+
+## DCO Signoff
+
+We require a DCO signoff for all commits. For more information, see the [DCO Signoff](https://cert-manager.io/docs/contributing/sign-off/) documentation.
+
+```bash
+# Sign off a commit as you're making it
+git commit --signoff -m "my commit"
+
+# Add a signoff to the last commit you made
+git commit --amend --signoff
+
+# Rebase your branch against master and sign off every commit in your branch
+git rebase --signoff master
+```
+
+## Submitting Changes
+
+1. **Create a Branch**: Create a new branch for your changes:
+
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Make Changes**: Implement your changes in the appropriate files. Commit your changes with clear and descriptive commit messages.
+
+3. **Update Documentation**: Update or add documentation to reflect your changes. This includes updating README files, docstrings, and any relevant guides.
+
+4. **Run Tests and Quality Checks**: Before submitting your changes, ensure all tests pass and code quality checks are satisfied:
+
+   ```bash
+   make quality
+   ```
+
+5. **Push Changes**: Push your branch to your forked repository (if you forked):
+
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+
+6. **Open a Pull Request**: From the fork repository, use the contribute button to open a pull request to the original repository's main branch. Provide a clear description of your changes and link any related issues.
+
+## Reporting Issues
+
+If you encounter a bug or have a feature request, please open an issue on GitHub. Include as much detail as possible, such as:
+
+- Steps to reproduce the issue
+- Expected and actual behavior
+- Environment details (OS, Python version, etc.)
+
+## Community Standards
+
+We are committed to fostering a welcoming and inclusive community. Please read and adhere to our [Code of Conduct](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md).
+
+## Additional Resources
+
+- [CODE_OF_CONDUCT.md](https://github.com/vllm-project/speculators/blob/main/CODE_OF_CONDUCT.md): Our expectations for community behavior.
+- [Makefile](https://github.com/vllm-project/speculators/blob/main/Makefile): Quality check and style commands.
+
+## License
+
+By contributing to Speculators, you agree that your contributions will be licensed under the [Apache License 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE).

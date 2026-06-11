@@ -1,0 +1,21 @@
+# ninja log v7
+1	7	1781194477842787974	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-mkdir	e4fd4527cb9ee48e
+1	7	1781194477842787974	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-mkdir	e4fd4527cb9ee48e
+7	4889	1781194482726785751	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-download	6106a528dfa97a92
+7	4889	1781194482726785751	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-download	6106a528dfa97a92
+4889	4898	1781194482726785751	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-update	e77232849c4f29cc
+4889	4898	1781194482726785751	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-update	e77232849c4f29cc
+4898	4903	1781194482742785744	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-patch	65a9fa164b714a5d
+4898	4903	1781194482742785744	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-patch	65a9fa164b714a5d
+4903	4909	1781194482746785742	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-configure	d1fa95a5dc041f15
+4903	4909	1781194482746785742	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-configure	d1fa95a5dc041f15
+4909	4914	1781194482750785740	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-build	b678f406bff93c59
+4909	4914	1781194482750785740	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-build	b678f406bff93c59
+4914	4920	1781194482758785736	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-install	78b345d8c57a00d9
+4914	4920	1781194482758785736	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-install	78b345d8c57a00d9
+4920	4925	1781194482762785735	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-test	7dd0f8b4ef826232
+4920	4925	1781194482762785735	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-test	7dd0f8b4ef826232
+4925	4933	1781194482770785731	CMakeFiles/cutlass-populate-complete	1f9b6e716132841f
+4925	4933	1781194482770785731	cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-done	1f9b6e716132841f
+4925	4933	1781194482770785731	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/CMakeFiles/cutlass-populate-complete	1f9b6e716132841f
+4925	4933	1781194482770785731	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/cutlass-subbuild/cutlass-populate-prefix/src/cutlass-populate-stamp/cutlass-populate-done	1f9b6e716132841f

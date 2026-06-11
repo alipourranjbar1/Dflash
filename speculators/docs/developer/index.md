@@ -1,0 +1,62 @@
+# Developer
+
+Welcome to the Developer section of Speculators! This area provides essential resources for developers who want to contribute to or extend Speculators. Whether you're interested in fixing bugs, adding new features, improving documentation, or understanding the project's governance, you'll find comprehensive guides to help you get started.
+
+Speculators is an open-source project that values community contributions. We maintain high standards for code quality, documentation, and community interactions to ensure that Speculators remains a robust, reliable, and user-friendly tool for speculative decoding in large language model inference.
+
+## Developer Resources
+
+<div class="grid cards" markdown>
+
+- :material-handshake:{ .lg .middle } Code of Conduct
+
+  ______________________________________________________________________
+
+  Our community guidelines ensure that participation in the Speculators project is a positive, inclusive, and respectful experience for everyone.
+
+  [:octicons-arrow-right-24: Code of Conduct](code_of_conduct.md)
+
+- :material-source-pull:{ .lg .middle } Contributing Guide
+
+  ______________________________________________________________________
+
+  Learn how to effectively contribute to Speculators, including reporting bugs, suggesting features, improving documentation, and submitting code.
+
+  [:octicons-arrow-right-24: Contributing Guide](contributing.md)
+
+- :material-source-pull:{ .lg .middle } Add new algorithms
+
+  ______________________________________________________________________
+
+  Learn how to add a new speculative decoding training algorithm.
+
+  [:octicons-arrow-right-24: Add new algorithms](add_algorithm.md)
+
+- :material-palette:{ .lg .middle } Branding Guidelines
+
+  ______________________________________________________________________
+
+  Guidance and assets for using the Speculators brand in docs, slides, blogs, and social posts.
+
+  [:octicons-arrow-right-24: Branding Guidelines](branding.md)
+
+</div>
+
+## Getting Started with Development
+
+### Quick Setup
+
+1. **Prerequisites**: Ensure you have Python 3.10+ and Git installed
+2. **Clone**: `git clone https://github.com/vllm-project/speculators.git`
+3. **Install**: `pip install -e .[dev]`
+4. **Code Quality**: Run `make quality` to check code quality, or `make style` to auto-fix issues
+
+## Community and Support
+
+Speculators is developed and maintained by Red Hat and the open-source community. We encourage contributions from researchers, engineers, and practitioners working with large language model inference optimization.
+
+For questions, discussions, or support:
+
+- **Issues**: [GitHub Issues](https://github.com/vllm-project/speculators/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/vllm-project/speculators/discussions)
+- **License**: [Apache 2.0](https://github.com/vllm-project/speculators/blob/main/LICENSE)

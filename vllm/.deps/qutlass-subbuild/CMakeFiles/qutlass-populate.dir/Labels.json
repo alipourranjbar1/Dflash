@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/CMakeFiles/qutlass-populate"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/CMakeFiles/qutlass-populate.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/CMakeFiles/qutlass-populate-complete.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-build.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-configure.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-download.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-install.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-patch.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-test.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/qutlass-subbuild/qutlass-populate-prefix/src/qutlass-populate-stamp/qutlass-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"qutlass-populate"
+		],
+		"name" : "qutlass-populate"
+	}
+}

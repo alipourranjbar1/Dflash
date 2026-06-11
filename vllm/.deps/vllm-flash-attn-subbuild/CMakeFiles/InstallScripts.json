@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/vllm-flash-attn-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

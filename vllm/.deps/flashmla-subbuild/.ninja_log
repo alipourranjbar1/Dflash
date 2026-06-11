@@ -1,0 +1,21 @@
+# ninja log v7
+1	7	1781194518718769369	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-mkdir	f6a8f642d9a0dec0
+1	7	1781194518718769369	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-mkdir	f6a8f642d9a0dec0
+7	4738	1781194523446767217	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-download	90da7a5f59eaa6e3
+7	4738	1781194523446767217	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-download	90da7a5f59eaa6e3
+4738	4747	1781194523450767215	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-update	d587438942f27e1f
+4738	4747	1781194523450767215	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-update	d587438942f27e1f
+4747	4752	1781194523462767209	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-patch	9f81884c4a3f06f1
+4747	4752	1781194523462767209	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-patch	9f81884c4a3f06f1
+4752	4757	1781194523466767207	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-configure	70d57d98799b030
+4752	4757	1781194523466767207	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-configure	70d57d98799b030
+4757	4763	1781194523474767204	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-build	e2c2db48c0f84f86
+4757	4763	1781194523474767204	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-build	e2c2db48c0f84f86
+4763	4768	1781194523478767202	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-install	c65d67defe164fa3
+4763	4768	1781194523478767202	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-install	c65d67defe164fa3
+4768	4773	1781194523482767200	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-test	a5425f0fafd049d1
+4768	4773	1781194523482767200	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-test	a5425f0fafd049d1
+4773	4781	1781194523490767197	CMakeFiles/flashmla-populate-complete	defde411898f4967
+4773	4781	1781194523490767197	flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-done	defde411898f4967
+4773	4781	1781194523490767197	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/CMakeFiles/flashmla-populate-complete	defde411898f4967
+4773	4781	1781194523490767197	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/flashmla-subbuild/flashmla-populate-prefix/src/flashmla-populate-stamp/flashmla-populate-done	defde411898f4967

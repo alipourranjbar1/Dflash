@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: MIT
+# Copyright (C) 2024-2026, Advanced Micro Devices, Inc. All rights reserved.
+
+import torch
+from torch import Tensor
+from ..jit.core import compile_ops
+from typing import Optional
+
+
+@compile_ops(
+    "module_fused_qk_norm_rope_cache_quant_shuffle",
+    fc_name="fused_qk_norm_rope_cache_quant_shuffle",
+)
+def _fused_qk_norm_rope_cache_quant_shuffle_hip(
+    qkv: Tensor,
+    num_heads_q: int,
+    num_heads_k: int,
+    num_heads_v: int,
+    head_dim: int,
+    eps: float,
+    qw: Tensor,
+    kw: Tensor,
+    cos_sin_cache: Tensor,
+    is_neox_style: bool,
+    pos_ids: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,  # 4D [B,Hv,D,page] or 5D shuffle [B,Hv,page//x,D,x], x=16//elem_size
+    slot_mapping: Tensor,
+    kv_cache_dtype: str,
+    k_scale: Tensor,
+    v_scale: Tensor,
+    q: Optional[Tensor] = None,
+    k: Optional[Tensor] = None,
+    v: Optional[Tensor] = None,
+) -> None: ...
+
+
+def fused_qk_norm_rope_cache_quant_shuffle(
+    qkv: Optional[Tensor] = None,
+    *,
+    num_heads_q: int,
+    num_heads_k: int,
+    num_heads_v: int,
+    head_dim: int,
+    eps: float,
+    qw: Tensor,
+    kw: Tensor,
+    cos_sin_cache: Tensor,
+    is_neox_style: bool,
+    pos_ids: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,
+    slot_mapping: Tensor,
+    kv_cache_dtype: str,
+    k_scale: Tensor,
+    v_scale: Tensor,
+    q: Optional[Tensor] = None,
+    k: Optional[Tensor] = None,
+    v: Optional[Tensor] = None,
+) -> None:
+    if q is None:
+        if qkv is None or qkv.numel() == 0:
+            raise TypeError(
+                "fused_qk_norm_rope_cache_quant_shuffle: non-empty `qkv` is required when "
+                "`q`, `k`, `v` are not all passed."
+            )
+        _fused_qk_norm_rope_cache_quant_shuffle_hip(
+            qkv,
+            num_heads_q,
+            num_heads_k,
+            num_heads_v,
+            head_dim,
+            eps,
+            qw,
+            kw,
+            cos_sin_cache,
+            is_neox_style,
+            pos_ids,
+            k_cache,
+            v_cache,
+            slot_mapping,
+            kv_cache_dtype,
+            k_scale,
+            v_scale,
+            None,
+            None,
+            None,
+        )
+        return
+    if k is None or v is None:
+        raise TypeError(
+            "fused_qk_norm_rope_cache_quant_shuffle: q, k, v must be provided together."
+        )
+    qkv_hip: Tensor = (
+        qkv
+        if qkv is not None and qkv.numel() > 0
+        else torch.empty((0, 0), device=q.device, dtype=q.dtype)
+    )
+    _fused_qk_norm_rope_cache_quant_shuffle_hip(
+        qkv_hip,
+        num_heads_q,
+        num_heads_k,
+        num_heads_v,
+        head_dim,
+        eps,
+        qw,
+        kw,
+        cos_sin_cache,
+        is_neox_style,
+        pos_ids,
+        k_cache,
+        v_cache,
+        slot_mapping,
+        kv_cache_dtype,
+        k_scale,
+        v_scale,
+        q,
+        k,
+        v,
+    )
+
+
+def gen_fused_qk_rmsnorm_fake_tensor(
+    q: Tensor,
+    q_weight: Tensor,
+    q_eps: float,
+    k: Tensor,
+    k_weight: Tensor,
+    k_eps: float,
+    q_out: Optional[Tensor],
+    k_out: Optional[Tensor],
+) -> tuple[Tensor, Tensor]:
+    if q_out is None:
+        q_out = torch.empty_like(q, dtype=q.dtype, device=q.device)
+    if k_out is None:
+        k_out = torch.empty_like(k, dtype=k.dtype, device=k.device)
+    return q_out, k_out
+
+
+@compile_ops(
+    "module_fused_qk_norm_rope_cache_quant_shuffle",
+    fc_name="fused_qk_rmsnorm",
+    gen_fake=gen_fused_qk_rmsnorm_fake_tensor,
+)
+def _fused_qk_rmsnorm_kernel(
+    q: Tensor,
+    q_weight: Tensor,
+    q_eps: float,
+    k: Tensor,
+    k_weight: Tensor,
+    k_eps: float,
+    q_out: Optional[Tensor],
+    k_out: Optional[Tensor],
+) -> tuple[Tensor, Tensor]: ...
+
+
+_FUSED_QK_FALLBACK_M = 16384
+
+
+def _fused_qk_rmsnorm(
+    q_out: Optional[Tensor],
+    q: Tensor,
+    q_weight: Tensor,
+    q_eps: float,
+    k_out: Optional[Tensor],
+    k: Tensor,
+    k_weight: Tensor,
+    k_eps: float,
+) -> tuple[Tensor, Tensor]:
+    m = q.size(0)
+    if m >= _FUSED_QK_FALLBACK_M:
+        from .rmsnorm import rmsnorm
+
+        if q_out is None:
+            q_out = torch.empty_like(q, dtype=q.dtype, device=q.device)
+        if k_out is None:
+            k_out = torch.empty_like(k, dtype=k.dtype, device=k.device)
+
+        rmsnorm(q_out, q, q_weight, q_eps)
+        rmsnorm(k_out, k, k_weight, k_eps)
+        return q_out, k_out
+    else:
+        return _fused_qk_rmsnorm_kernel(
+            q, q_weight, q_eps, k, k_weight, k_eps, q_out, k_out
+        )
+
+
+@compile_ops("module_fused_qk_norm_rope_cache_quant_shuffle")
+def fused_qk_norm_rope_cache_block_quant_shuffle(
+    qkv: Tensor,
+    num_heads_q: int,
+    num_heads_k: int,
+    num_heads_v: int,
+    head_dim: int,
+    eps: float,
+    qw: Tensor,
+    kw: Tensor,
+    cos_sin_cache: Tensor,
+    is_neox_style: bool,
+    pos_ids: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,
+    slot_mapping: Tensor,
+    cu_q_len: Tensor,
+    kv_cache_dtype: str,
+    k_scale: Tensor,
+    v_scale: Tensor,
+    max_tokens_per_batch: int = 0,
+) -> None: ...
+
+
+@compile_ops("module_fused_qk_norm_rope_cache_quant_shuffle")
+def fused_qk_norm_rope_cache_pts_quant_shuffle(
+    qkv: Tensor,
+    qw: Tensor,
+    kw: Tensor,
+    cos_sin: Tensor,
+    positions: Tensor,
+    num_tokens: int,
+    num_heads_q: int,
+    num_heads_k: int,
+    num_heads_v: int,
+    head_size: int,
+    is_neox_style: bool,
+    eps: float,
+    q_out: Tensor,
+    k_cache: Tensor,
+    v_cache: Tensor,
+    slot_mapping: Tensor,
+    per_tensor_k_scale: Tensor,
+    per_tensor_v_scale: Tensor,
+    k_out: Optional[Tensor],
+    v_out: Optional[Tensor],
+    return_kv: bool,
+    use_shuffle_layout: bool,
+    block_size: int,
+    x: int,
+    rotary_dim: int = 0,
+) -> None: ...
+
+
+@compile_ops("module_fused_qk_norm_rope_cache_quant_shuffle")
+def fused_qk_norm_rope_2way(
+    q0: Tensor,
+    k0: Tensor,
+    q1: Tensor,
+    k1: Tensor,
+    w_q0: Tensor,
+    w_k0: Tensor,
+    w_q1: Tensor,
+    w_k1: Tensor,
+    cos_sin0: Tensor,
+    cos_sin1: Tensor,
+    batch_size: int,
+    num_tokens0: int,
+    num_tokens1: int,
+    num_heads_q: int,
+    num_heads_k: int,
+    head_size: int,
+    is_interleaved: bool,
+    eps: float,
+    out_q01: Tensor,
+    out_k01: Tensor,
+) -> None: ...

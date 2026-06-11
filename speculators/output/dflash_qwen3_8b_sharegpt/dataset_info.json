@@ -1,0 +1,56 @@
+{
+  "builder_name": "json",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "share_gpt_vicuna_unfiltered",
+  "dataset_size": 751167243,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/Aeala/ShareGPT_Vicuna_unfiltered@8b0048ad6ae8c22f46a78c15559dec98feef5539/ShareGPT_2023.05.04v0_Wasteland_Edition.json": {
+      "num_bytes": 332126737,
+      "checksum": null
+    },
+    "hf://datasets/Aeala/ShareGPT_Vicuna_unfiltered@8b0048ad6ae8c22f46a78c15559dec98feef5539/ShareGPT_V4.3_unfiltered_cleaned_split.json": {
+      "num_bytes": 464322921,
+      "checksum": null
+    }
+  },
+  "download_size": 796449658,
+  "features": {
+    "input_ids": {
+      "feature": {
+        "dtype": "int32",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "loss_mask": {
+      "feature": {
+        "dtype": "bool",
+        "_type": "Value"
+      },
+      "_type": "List"
+    },
+    "seq_len": {
+      "dtype": "int64",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 1547616901,
+  "splits": {
+    "train": {
+      "name": "train",
+      "num_bytes": 751167243,
+      "num_examples": 120675,
+      "dataset_name": "share_gpt_vicuna_unfiltered"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}

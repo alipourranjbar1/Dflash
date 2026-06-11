@@ -1,0 +1,21 @@
+# ninja log v7
+0	6	1781194511478772664	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-mkdir	a58ff83fc3025ead
+0	6	1781194511478772664	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-mkdir	a58ff83fc3025ead
+7	6847	1781194518318769550	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-download	3f7811464f7ad3e
+7	6847	1781194518318769550	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-download	3f7811464f7ad3e
+6847	6856	1781194518318769550	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-update	7a7d257f45b90d67
+6847	6856	1781194518318769550	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-update	7a7d257f45b90d67
+6856	6862	1781194518334769544	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-patch	56241f3500bd372f
+6856	6862	1781194518334769544	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-patch	56241f3500bd372f
+6862	6867	1781194518338769542	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-configure	cbb8428e17bc16b4
+6862	6867	1781194518338769542	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-configure	cbb8428e17bc16b4
+6867	6873	1781194518346769538	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-build	61bddc8bd29346f9
+6867	6873	1781194518346769538	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-build	61bddc8bd29346f9
+6873	6878	1781194518350769536	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-install	93e8ff0e18b8db8a
+6873	6878	1781194518350769536	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-install	93e8ff0e18b8db8a
+6878	6884	1781194518354769534	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-test	32b0b5f7ca7c3dab
+6878	6884	1781194518354769534	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-test	32b0b5f7ca7c3dab
+6884	6892	1781194518362769530	CMakeFiles/deepgemm-populate-complete	2fc435a45b1b4744
+6884	6892	1781194518362769530	deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-done	2fc435a45b1b4744
+6884	6892	1781194518362769530	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/CMakeFiles/deepgemm-populate-complete	2fc435a45b1b4744
+6884	6892	1781194518362769530	/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-done	2fc435a45b1b4744

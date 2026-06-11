@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/CMakeFiles/deepgemm-populate"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/CMakeFiles/deepgemm-populate.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/CMakeFiles/deepgemm-populate-complete.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-build.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-configure.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-download.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-install.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-mkdir.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-patch.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-test.rule"
+		},
+		{
+			"file" : "/home/ubuntu/ali_vllm/vllm_dflash/vllm/.deps/deepgemm-subbuild/deepgemm-populate-prefix/src/deepgemm-populate-stamp/deepgemm-populate-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"deepgemm-populate"
+		],
+		"name" : "deepgemm-populate"
+	}
+}
