@@ -225,6 +225,11 @@ class DFlashSpeculator(DraftModelSpeculator):
         last_hidden_states: torch.Tensor,
         # num_layers x [num_tokens, hidden_size]
         aux_hidden_states: list[torch.Tensor] | None,
+        # Optional: per-draft-layer K/V from the target model.
+        # Each element is (k, v) with shape [num_tokens, num_kv_heads, head_dim].
+        # When provided, context K/V are taken directly from the target instead
+        # of being re-projected from target hidden states.
+        aux_kv_states: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         # [num_reqs]
         num_sampled: torch.Tensor,
         # [num_reqs]
@@ -316,16 +321,31 @@ class DFlashSpeculator(DraftModelSpeculator):
             self.max_num_tokens,
         )
 
-        # Pre-insert context K/V into the cache. Runs eagerly outside the captured graph
-        # because the context shape varies per step. During dummy runs the block tables
-        # are placeholders, so we skip the cache write to avoid clobbering real entries.
-        self.model.precompute_and_store_context_kv(
-            self.hidden_states[:num_target_tokens],
-            self.context_positions[:num_target_tokens],
-            context_slot_mapping=(
-                None if dummy_run else self.context_slot_mapping[:num_target_tokens]
-            ),
+        # Pre-insert context K/V into the draft cache.
+        # Runs eagerly outside the captured graph because context shape varies.
+        # During dummy runs block tables are placeholders — skip the cache write.
+        _ctx_slot_mapping = (
+            None if dummy_run else self.context_slot_mapping[:num_target_tokens]
         )
+        if aux_kv_states is not None:
+            # New path: use K/V brought directly from target model layers.
+            # aux_kv_states[i] = (k, v) for draft layer i,
+            # shapes [num_target_tokens, num_kv_heads, head_dim].
+            target_k_layers = [kv[0][:num_target_tokens] for kv in aux_kv_states]
+            target_v_layers = [kv[1][:num_target_tokens] for kv in aux_kv_states]
+            self.model.precompute_and_store_context_kv_from_target(
+                target_k_layers,
+                target_v_layers,
+                self.context_positions[:num_target_tokens],
+                context_slot_mapping=_ctx_slot_mapping,
+            )
+        else:
+            # Original path: project context K/V from target hidden states.
+            self.model.precompute_and_store_context_kv(
+                self.hidden_states[:num_target_tokens],
+                self.context_positions[:num_target_tokens],
+                context_slot_mapping=_ctx_slot_mapping,
+            )
 
         # Every DFlash step has exactly num_query_per_req tokens, so we can use FULL CGs
         batch_desc, num_tokens_across_dp = dispatch_cg_and_sync_dp(

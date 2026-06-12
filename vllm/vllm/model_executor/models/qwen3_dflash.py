@@ -435,6 +435,93 @@ class DFlashQwen3Model(nn.Module):
                 context_slot_mapping,
             )
 
+    def precompute_and_store_context_kv_from_target(
+        self,
+        target_k_layers: list[torch.Tensor],
+        target_v_layers: list[torch.Tensor],
+        context_positions: torch.Tensor,
+        context_slot_mapping: torch.Tensor | None = None,
+    ) -> None:
+        """Store context K/V coming directly from the target model's KV cache.
+
+        Instead of projecting target hidden states through the draft's own
+        K/V weights (as precompute_and_store_context_kv does), this method
+        accepts already-computed raw K/V projections from the corresponding
+        target attention layers and writes them into the draft KV cache after
+        applying K-norm and RoPE.
+
+        Args:
+            target_k_layers: List of K tensors, one per draft layer.
+                Shape per element: [num_ctx, num_kv_heads, head_dim]
+                These are raw K projections (pre k_norm, pre RoPE) from the
+                target attention layer that maps to each draft layer.
+            target_v_layers: List of V tensors, one per draft layer.
+                Shape per element: [num_ctx, num_kv_heads, head_dim]
+                Raw V projections from the corresponding target layer.
+            context_positions: [num_ctx] token positions for RoPE.
+            context_slot_mapping: [num_ctx] KV cache slot indices.
+                If None (dummy run) the computation still runs but no
+                cache write occurs.
+        """
+        if not hasattr(self, "_num_attn_layers"):
+            self._build_fused_kv_buffers()
+
+        L = self._num_attn_layers
+        assert len(target_k_layers) == L and len(target_v_layers) == L, (
+            f"Expected {L} K/V tensors (one per draft layer), "
+            f"got {len(target_k_layers)} K and {len(target_v_layers)} V."
+        )
+
+        num_ctx = target_k_layers[0].shape[0]
+        nkv = self._num_kv_heads
+        hd = self._head_dim
+        kv = self._kv_size
+
+        # Stack into [L, num_ctx, nkv, hd] — same layout used by the fused path
+        all_k = torch.stack(target_k_layers, dim=0).contiguous()  # [L, num_ctx, nkv, hd]
+        all_v = torch.stack(target_v_layers, dim=0).contiguous()  # [L, num_ctx, nkv, hd]
+
+        # --- Per-layer K-norm ---
+        all_k_normed = torch.empty_like(all_k)
+        for i in range(L):
+            ops.rms_norm(
+                all_k_normed[i],
+                all_k[i],
+                self._k_norm_weights[i],
+                self._rms_norm_eps,
+            )
+
+        # --- Fused RoPE across all layers ---
+        all_k_flat = all_k_normed.view(L * num_ctx, kv)
+        positions_repeated = context_positions.repeat(L)
+        cos_sin_cache = self._rope_cos_sin_cache
+        if cos_sin_cache.dtype != all_k_flat.dtype:
+            cos_sin_cache = cos_sin_cache.to(dtype=all_k_flat.dtype)
+        ops.rotary_embedding(
+            positions_repeated,
+            all_k_flat,
+            None,
+            self._rope_head_size,
+            cos_sin_cache,
+            self._rope_is_neox,
+        )
+
+        if context_slot_mapping is None:
+            return
+
+        # --- Per-layer cache insert ---
+        all_k_final = all_k_flat.view(L, num_ctx, nkv, hd)
+        for i in range(L):
+            attn = self._attn_layers[i]
+            kv_cache = attn.kv_cache
+            attn.impl.do_kv_cache_update(
+                attn,
+                all_k_final[i],
+                all_v[i],
+                kv_cache,
+                context_slot_mapping,
+            )
+
     def forward(
         self,
         input_ids: torch.Tensor,
