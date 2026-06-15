@@ -5,7 +5,7 @@ vllm/tests/
 vllm/benchmarks/
 vllm/vllm.egg-info/
 vllm/vllm/vllm_flash_attn/
-
+speculators/output
 speculators/.deps/
 speculators/build/
 speculators/dist/
