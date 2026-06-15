@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+from enum import Enum
 from typing import Any
 
 import torch
@@ -26,6 +27,185 @@ from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
 from vllm.v1.worker.gpu.spec_decode.utils import get_parallel_drafting_token_id
 
 logger = init_logger(__name__)
+
+
+class _KVMode(str, Enum):
+    """Controls how DFlash populates the draft model's context KV cache.
+
+    Select via ``dflash_config.kv_mode`` in the drafter's ``config.json``.
+    ``hidden_states`` is the default and requires no extra configuration.
+    All other modes also require ``dflash_config.kv_target_layer_ids``.
+
+    Modes
+    -----
+    hidden_states  — (default) Target hidden states are projected through the
+                     draft's own k/v projection weights, then the **draft's**
+                     k-norm and RoPE are applied before writing to the draft
+                     KV cache.  No hooks on the target model.
+
+    raw_copy       — Hook on ``self_attn.qkv_proj`` captures K and V
+                     **before** k-norm and RoPE.  The **draft's own** k-norm
+                     and RoPE are then applied before writing to the draft KV
+                     cache.  Useful when the draft has different norm/RoPE
+                     parameters than the target.
+
+    copy           — Hook on ``self_attn.attn`` captures K and V **after**
+                     k-norm and RoPE — the exact values the target writes to
+                     its paged cache.  Written directly to the draft KV cache
+                     with no further transformation.  The draft cache is a
+                     separate GPU allocation.
+
+    alias          — Same hook as ``copy``, but the draft attention layers'
+                     ``kv_cache`` tensors are **aliased** to the corresponding
+                     target layers' ``kv_cache`` tensors after ``set_attn``.
+                     The precompute write step is skipped entirely: the target
+                     already wrote the right K/V into the shared tensor.  The
+                     draft reads context K/V from the target's physical pages
+                     and writes speculative K/V to its own allocated blocks.
+                     Prerequisites: same num_kv_heads and head_dim; target's
+                     block manager must pre-allocate speculative slots.
+    """
+
+    HIDDEN_STATES = "hidden_states"
+    RAW_COPY = "raw_copy"
+    COPY = "copy"
+    ALIAS = "alias"
+
+
+class _KVCaptureHooks:
+    """Captures K/V tensors from target attention layers via PyTorch forward hooks.
+
+    Supports two hook placements controlled by ``raw``:
+
+    * ``raw=True``  — hook on ``self_attn.qkv_proj``: captures K and V
+      **before** k-norm and RoPE (raw projection outputs).  Used by
+      ``raw_copy`` mode so the draft can apply its own k-norm + RoPE.
+
+    * ``raw=False`` (default) — hook on ``self_attn.attn``: captures K and V
+      **after** k-norm and RoPE — identical to what the target stores in its
+      paged KV cache.  Used by ``copy`` and ``alias`` modes.
+
+    Usage::
+
+        hooks = _KVCaptureHooks.register(
+            target_model, kv_layer_ids, draft_num_layers, raw=False
+        )
+        # ... target model forward runs, hooks fire automatically ...
+        kv_list = hooks.pop()  # list[(k, v)] per draft layer, or None
+    """
+
+    def __init__(self) -> None:
+        self._captured: list[tuple[torch.Tensor, torch.Tensor]] = []
+        self._hooks: list[torch.utils.hooks.RemovableHook] = []
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _make_post_norm_hook(buf: "_KVCaptureHooks"):
+        """Hook for self_attn.attn — inputs are post-k_norm + post-RoPE."""
+        def _hook(module, inp, output):
+            # inp = (query, key, value, ...) fed into Attention.forward
+            k = inp[1].detach()  # [num_tokens, kv_size]
+            v = inp[2].detach()  # [num_tokens, kv_size]
+            buf._captured.append((k, v))
+        return _hook
+
+    @staticmethod
+    def _make_pre_norm_hook(buf: "_KVCaptureHooks", q_size: int, kv_size: int):
+        """Hook for self_attn.qkv_proj — output is raw QKV (pre-k_norm, pre-RoPE)."""
+        def _hook(module, inp, output):
+            qkv = output[0] if isinstance(output, tuple) else output
+            # qkv: [num_tokens, q_size + 2 * kv_size]
+            k = qkv[..., q_size : q_size + kv_size].detach()
+            v = qkv[..., q_size + kv_size :].detach()
+            buf._captured.append((k, v))
+        return _hook
+
+    # ------------------------------------------------------------------
+    @classmethod
+    def register(
+        cls,
+        target_model: nn.Module,
+        target_layer_ids: list[int],
+        draft_num_layers: int,
+        raw: bool = False,
+    ) -> "_KVCaptureHooks":
+        """Register hooks and return the capture buffer.
+
+        Parameters
+        ----------
+        raw:
+            ``True``  → hook ``self_attn.qkv_proj`` (pre-k_norm, pre-RoPE).
+            ``False`` → hook ``self_attn.attn``     (post-k_norm, post-RoPE).
+        """
+        buf = cls()
+
+        if len(target_layer_ids) != draft_num_layers:
+            logger.warning(
+                "DFlash KV capture: kv_target_layer_ids length (%d) != "
+                "draft num_hidden_layers (%d). Falling back to hidden_states.",
+                len(target_layer_ids),
+                draft_num_layers,
+            )
+            return buf
+
+        target_lm = (
+            target_model.get_language_model()
+            if hasattr(target_model, "get_language_model")
+            else target_model
+        )
+        layers = getattr(getattr(target_lm, "model", target_lm), "layers", None)
+        if layers is None:
+            logger.warning(
+                "DFlash KV capture: cannot find target model layers; "
+                "falling back to hidden_states."
+            )
+            return buf
+
+        placement = "qkv_proj (pre-norm/RoPE)" if raw else "attn (post-norm/RoPE)"
+        for lid in target_layer_ids:
+            if lid >= len(layers):
+                logger.warning(
+                    "DFlash KV capture: layer %d out of range (%d layers); skipping.",
+                    lid, len(layers),
+                )
+                continue
+            attn_mod = layers[lid].self_attn
+            if raw:
+                handle = attn_mod.qkv_proj.register_forward_hook(
+                    cls._make_pre_norm_hook(buf, attn_mod.q_size, attn_mod.kv_size)
+                )
+            else:
+                handle = attn_mod.attn.register_forward_hook(
+                    cls._make_post_norm_hook(buf)
+                )
+            buf._hooks.append(handle)
+
+        logger.info(
+            "DFlash KV capture: hooked target layers %s via %s.",
+            target_layer_ids, placement,
+        )
+        return buf
+
+    # ------------------------------------------------------------------
+    def pop(self) -> list[tuple[torch.Tensor, torch.Tensor]] | None:
+        """Return and clear the accumulated (k, v) list, or ``None`` if empty."""
+        if not self._captured:
+            return None
+        result = self._captured
+        self._captured = []
+        return result
+
+    # ------------------------------------------------------------------
+    def remove(self) -> None:
+        """Unregister all hooks (call on teardown)."""
+        for h in self._hooks:
+            h.remove()
+        self._hooks.clear()
+
+    # ------------------------------------------------------------------
+    def __bool__(self) -> bool:
+        """True when hooks are actually registered."""
+        return bool(self._hooks)
 
 
 class DFlashSpeculator(DraftModelSpeculator):
@@ -78,6 +258,14 @@ class DFlashSpeculator(DraftModelSpeculator):
         self.query_cudagraph_manager: DFlashCudaGraphManager | None = None
         self.draft_kv_cache_group_id: int = -1
 
+        # KV sharing mode and capture hooks.
+        # Populated by load_draft_model from dflash_config.
+        self._kv_mode: _KVMode = _KVMode.HIDDEN_STATES
+        self._kv_target_layer_ids: list[int] = []
+        self._kv_capture: _KVCaptureHooks | None = None
+        # Reference to target model kept for alias-mode post-set_attn wiring.
+        self._target_model_ref: nn.Module | None = None
+
     def init_cudagraph_manager(self, cudagraph_mode: CUDAGraphMode) -> None:
         # PIECEWISE cudagraphs are not supported for dflash
         if cudagraph_mode.decode_mode() == CUDAGraphMode.FULL:
@@ -116,7 +304,104 @@ class DFlashSpeculator(DraftModelSpeculator):
         target_model: nn.Module,
         target_attn_layer_names: set[str],
     ) -> nn.Module:
-        return load_dflash_model(target_model, self.vllm_config)
+        dflash_model = load_dflash_model(target_model, self.vllm_config)
+
+        drafter_cfg = (
+            getattr(self.draft_model_config.hf_config, "dflash_config", None) or {}
+        )
+        kv_layer_ids: list[int] | None = drafter_cfg.get("kv_target_layer_ids", None)
+        raw_mode: str = drafter_cfg.get("kv_mode", _KVMode.HIDDEN_STATES.value)
+        try:
+            self._kv_mode = _KVMode(raw_mode)
+        except ValueError:
+            logger.warning(
+                "DFlash: unknown kv_mode %r — falling back to 'hidden_states'.", raw_mode
+            )
+            self._kv_mode = _KVMode.HIDDEN_STATES
+
+        if self._kv_mode == _KVMode.HIDDEN_STATES:
+            logger.info("DFlash KV mode: hidden_states (original projection path).")
+            return dflash_model
+
+        # All other modes require kv_target_layer_ids.
+        draft_num_layers = self.draft_model_config.hf_config.num_hidden_layers
+        if kv_layer_ids is None:
+            logger.warning(
+                "DFlash kv_mode=%r requires kv_target_layer_ids in dflash_config; "
+                "falling back to 'hidden_states'.",
+                self._kv_mode.value,
+            )
+            self._kv_mode = _KVMode.HIDDEN_STATES
+            return dflash_model
+
+        self._kv_target_layer_ids = kv_layer_ids
+
+        # raw_copy hooks qkv_proj (pre-norm, pre-RoPE).
+        # copy and alias hook self_attn.attn (post-norm, post-RoPE).
+        use_raw = self._kv_mode == _KVMode.RAW_COPY
+        self._kv_capture = _KVCaptureHooks.register(
+            target_model, kv_layer_ids, draft_num_layers, raw=use_raw
+        )
+
+        if self._kv_mode == _KVMode.ALIAS:
+            self._target_model_ref = target_model
+            logger.info(
+                "DFlash KV mode: alias — will alias draft kv_cache tensors "
+                "to target layers %s after set_attn.",
+                kv_layer_ids,
+            )
+        else:
+            logger.info(
+                "DFlash KV mode: %s — K/V from target layers %s.",
+                self._kv_mode.value, kv_layer_ids,
+            )
+
+        return dflash_model
+
+    def _alias_kv_caches(self) -> None:
+        """Alias each draft attention layer's kv_cache to the corresponding
+        target layer's kv_cache (Mode ALIAS only).
+
+        After this call the two models share the same physical KV cache
+        memory for the mapped layers.  The draft attention will read context
+        K/V from the target's pages (at the target's slot positions) and
+        write speculative K/V to its own separately allocated blocks within
+        the same physical tensor.
+
+        Must be called after set_attn so that kv_cache tensors are allocated.
+        """
+        target = self._target_model_ref
+        if target is None or not self._kv_target_layer_ids:
+            return
+        target_lm = (
+            target.get_language_model() if hasattr(target, "get_language_model") else target
+        )
+        target_layers = getattr(getattr(target_lm, "model", target_lm), "layers", None)
+        draft_layers = getattr(
+            getattr(self.model, "model", self.model), "layers", None
+        )
+        if target_layers is None or draft_layers is None:
+            logger.warning("DFlash alias: could not locate layer lists; skipping alias.")
+            return
+
+        aliased = 0
+        for draft_idx, target_idx in enumerate(self._kv_target_layer_ids):
+            if draft_idx >= len(draft_layers) or target_idx >= len(target_layers):
+                continue
+            d_attn = draft_layers[draft_idx].self_attn.attn
+            t_attn = target_layers[target_idx].self_attn.attn
+            if not hasattr(d_attn, "kv_cache") or not hasattr(t_attn, "kv_cache"):
+                continue
+            d_attn.kv_cache = t_attn.kv_cache
+            aliased += 1
+
+        logger.info(
+            "DFlash KV mode: alias — aliased %d draft layer(s) to target kv_cache. "
+            "Draft attention now reads context K/V directly from target pages.",
+            aliased,
+        )
+        # Drop the reference; no longer needed.
+        self._target_model_ref = None
 
     def set_attn(
         self,
@@ -137,6 +422,10 @@ class DFlashSpeculator(DraftModelSpeculator):
         self.draft_block_size = self.block_tables.block_sizes[
             self.draft_kv_cache_group_id
         ]
+
+        # Alias mode: wire up shared kv_cache tensors now that they exist.
+        if self._kv_mode == _KVMode.ALIAS:
+            self._alias_kv_caches()
 
     @torch.inference_mode()
     def _run_model(
@@ -225,11 +514,6 @@ class DFlashSpeculator(DraftModelSpeculator):
         last_hidden_states: torch.Tensor,
         # num_layers x [num_tokens, hidden_size]
         aux_hidden_states: list[torch.Tensor] | None,
-        # Optional: per-draft-layer K/V from the target model.
-        # Each element is (k, v) with shape [num_tokens, num_kv_heads, head_dim].
-        # When provided, context K/V are taken directly from the target instead
-        # of being re-projected from target hidden states.
-        aux_kv_states: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
         # [num_reqs]
         num_sampled: torch.Tensor,
         # [num_reqs]
@@ -247,6 +531,11 @@ class DFlashSpeculator(DraftModelSpeculator):
         skip_attn_for_dummy_run: bool = False,
         mm_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
         is_profile: bool = False,
+        # Optional: per-draft-layer K/V from the target model.
+        # Each element is (k, v) with shape [num_tokens, num_kv_heads, head_dim].
+        # When provided (or when self._kv_capture fires), context K/V are taken
+        # directly from the target instead of being re-projected from hidden states.
+        aux_kv_states: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
         num_reqs = input_batch.num_reqs
         num_target_tokens = input_batch.num_tokens
@@ -327,25 +616,59 @@ class DFlashSpeculator(DraftModelSpeculator):
         _ctx_slot_mapping = (
             None if dummy_run else self.context_slot_mapping[:num_target_tokens]
         )
-        if aux_kv_states is not None:
-            # New path: use K/V brought directly from target model layers.
-            # aux_kv_states[i] = (k, v) for draft layer i,
-            # shapes [num_target_tokens, num_kv_heads, head_dim].
-            target_k_layers = [kv[0][:num_target_tokens] for kv in aux_kv_states]
-            target_v_layers = [kv[1][:num_target_tokens] for kv in aux_kv_states]
-            self.model.precompute_and_store_context_kv_from_target(
-                target_k_layers,
-                target_v_layers,
-                self.context_positions[:num_target_tokens],
-                context_slot_mapping=_ctx_slot_mapping,
-            )
+
+        # --- Context K/V population — mode-driven ---
+        #
+        # HIDDEN_STATES : project from target hidden states via draft k/v weights,
+        #                 then apply draft k-norm + RoPE.
+        # RAW_COPY      : hook captured pre-norm, pre-RoPE K/V from qkv_proj;
+        #                 apply DRAFT's k-norm + RoPE before writing to draft cache.
+        # COPY          : hook captured post-norm+RoPE K/V from self_attn (exact
+        #                 target values); write directly — no further transforms.
+        # ALIAS         : draft kv_cache IS the target kv_cache (aliased in
+        #                 set_attn); target already wrote values — skip write step.
+
+        if self._kv_mode == _KVMode.ALIAS:
+            # Nothing to precompute: the aliased kv_cache already holds the
+            # target's K/V written during its own forward pass.
+            pass
+
         else:
-            # Original path: project context K/V from target hidden states.
-            self.model.precompute_and_store_context_kv(
-                self.hidden_states[:num_target_tokens],
-                self.context_positions[:num_target_tokens],
-                context_slot_mapping=_ctx_slot_mapping,
-            )
+            # Read hooked K/V for RAW_COPY / COPY modes.
+            if self._kv_capture:
+                hooked = self._kv_capture.pop()
+                if hooked is not None:
+                    aux_kv_states = hooked
+
+            if aux_kv_states is not None:
+                target_k_layers = [kv[0][:num_target_tokens] for kv in aux_kv_states]
+                target_v_layers = [kv[1][:num_target_tokens] for kv in aux_kv_states]
+
+                if self._kv_mode == _KVMode.RAW_COPY:
+                    # Pre-norm, pre-RoPE: apply draft's own k-norm + RoPE.
+                    self.model.precompute_and_store_context_kv_from_target(
+                        target_k_layers,
+                        target_v_layers,
+                        self.context_positions[:num_target_tokens],
+                        context_slot_mapping=_ctx_slot_mapping,
+                        skip_norm_and_rope=False,
+                    )
+                else:
+                    # COPY: post-norm+RoPE — write directly, no transforms.
+                    self.model.precompute_and_store_context_kv_from_target(
+                        target_k_layers,
+                        target_v_layers,
+                        self.context_positions[:num_target_tokens],
+                        context_slot_mapping=_ctx_slot_mapping,
+                        skip_norm_and_rope=True,
+                    )
+            else:
+                # HIDDEN_STATES: project context K/V from target hidden states.
+                self.model.precompute_and_store_context_kv(
+                    self.hidden_states[:num_target_tokens],
+                    self.context_positions[:num_target_tokens],
+                    context_slot_mapping=_ctx_slot_mapping,
+                )
 
         # Every DFlash step has exactly num_query_per_req tokens, so we can use FULL CGs
         batch_desc, num_tokens_across_dp = dispatch_cg_and_sync_dp(

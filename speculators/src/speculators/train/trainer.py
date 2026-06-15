@@ -46,6 +46,7 @@ class TrainerConfig(NamedTuple):
     scheduler_total_steps: int | None = None
     scheduler_num_cosine_cycles: float = 0.5
     checkpoint_freq: float = 1
+    checkpoint_steps: int | None = None
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
@@ -241,7 +242,14 @@ class Trainer:
                 )
             self.global_step += 1
 
+            # Global-step-based checkpointing: save to a folder named by the
+            # global step (e.g. checkpoints/100000/) every N steps.
             if (
+                self.config.checkpoint_steps is not None
+                and self.global_step % self.config.checkpoint_steps == 0
+            ):
+                self.save_step_checkpoint(self.global_step)
+            elif (
                 step_interval is not None
                 and not self.config.save_best
                 and local_step % step_interval == 0
@@ -292,6 +300,14 @@ class Trainer:
         )
 
         return val_metrics
+
+    def save_step_checkpoint(self, step: int):
+        """Save a checkpoint to a folder named by the global step."""
+        root_logger.info(f"Saving step checkpoint to {self.checkpointer.path / str(step)}")
+        self.checkpointer.save_checkpoint(self.model, self.opt, str(step))
+        if self.scheduler is not None:
+            self.checkpointer.save_scheduler_state_dict(self.scheduler, str(step))
+        root_logger.info(f"Step checkpoint saved to {self.checkpointer.path / str(step)}")
 
     def maybe_save_checkpoint(self, epoch: int | str):
         if epoch != "interrupted" and (

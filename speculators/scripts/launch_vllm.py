@@ -42,6 +42,17 @@ def parse_args():
         ),
     )
     parser.add_argument(
+        "--kv-target-layer-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help=(
+            "(Optional) Space-separated list of target layer indices whose K/V "
+            "will be saved alongside hidden states. Must match --kv-target-layer-ids "
+            "passed to the training script."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the command that would be executed without running it",
@@ -78,12 +89,14 @@ def main():
             num_hidden_layers,
         ]
 
+    hf_config: dict = {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
+    if args.kv_target_layer_ids:
+        hf_config["dflash_config"] = {"kv_target_layer_ids": args.kv_target_layer_ids}
+
     speculative_config = {
         "method": "extract_hidden_states",
         "num_speculative_tokens": 1,
-        "draft_model_config": {
-            "hf_config": {"eagle_aux_hidden_state_layer_ids": target_layer_ids}
-        },
+        "draft_model_config": {"hf_config": hf_config},
     }
     kv_transfer_config = {
         "kv_connector": "ExampleHiddenStatesConnector",

@@ -239,6 +239,8 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         verifier_last_hidden_states: torch.Tensor,  # shape: [1, total_seq_len, hidden_size] # noqa: E501
         lengths: torch.Tensor | None = None,  # shape: [batch_size]
         position_ids: torch.Tensor | None = None,  # shape: [1, total_seq_len]
+        target_k_all: torch.Tensor | None = None,  # [1, total_seq_len, num_layers, nkv*hd]
+        target_v_all: torch.Tensor | None = None,  # [1, total_seq_len, num_layers, nkv*hd]
         loss_fn=kl_div_loss,
         **kwargs,
     ):
@@ -269,9 +271,22 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
         noise_embedding = self.embed_tokens(mask_token_ids)
         # shape: [1, num_anchors*block_size, hidden_size]
 
-        fc_output = self.fc(hidden_states)
-        fc_output = self.hidden_norm(fc_output)
-        # shape: [1, total_seq_len, hidden_size]
+        # Mode-3: if target K/V are provided, skip fc projection entirely.
+        # target_k_all / target_v_all: [1, total_seq_len, num_layers, nkv*hd]
+        use_target_kv = target_k_all is not None and target_v_all is not None
+        if use_target_kv:
+            print("dddddd", flush=True)
+            # Unbind along layer dim → list of [1, total_seq_len, nkv*hd]
+            target_kvs = list(zip(
+                target_k_all.unbind(dim=2),
+                target_v_all.unbind(dim=2),
+            ))
+            fc_output = None
+        else:
+            target_kvs = None
+            fc_output = self.fc(hidden_states)
+            fc_output = self.hidden_norm(fc_output)
+            # shape: [1, total_seq_len, hidden_size]
 
         mask_position_ids = get_base_indices_for_anchored_blocks(
             position_ids[:, anchor_positions], self.block_size, input_ids.numel()
@@ -297,17 +312,33 @@ class DFlashDraftModel(DraftVocabMixin, SpeculatorModel):
             # shape: [1, num_anchors*block_size, draft_vocab_size]
 
         for layer_idx, layer in enumerate(self.layers):
-            noise_embedding = layer(
-                hidden_states=noise_embedding,
-                target_hidden=fc_output,
-                attention_mask=sliding_window_attn_mask
+            attn_mask = (
+                sliding_window_attn_mask
                 if layer_idx in self.sliding_window_indices
-                else full_attn_mask,
-                position_ids=position_ids,
-                use_cache=False,
-                position_embeddings=position_embeddings,
-                **kwargs,
+                else full_attn_mask
             )
+            if target_kvs is not None:
+                layer_k, layer_v = target_kvs[layer_idx]
+                noise_embedding = layer(
+                    hidden_states=noise_embedding,
+                    target_k=layer_k,
+                    target_v=layer_v,
+                    attention_mask=attn_mask,
+                    position_ids=position_ids,
+                    use_cache=False,
+                    position_embeddings=position_embeddings,
+                    **kwargs,
+                )
+            else:
+                noise_embedding = layer(
+                    hidden_states=noise_embedding,
+                    target_hidden=fc_output,
+                    attention_mask=attn_mask,
+                    position_ids=position_ids,
+                    use_cache=False,
+                    position_embeddings=position_embeddings,
+                    **kwargs,
+                )
 
         logits = self.lm_head(self.norm(noise_embedding))
         # shape: [1, num_anchors*block_size, vocab_size]

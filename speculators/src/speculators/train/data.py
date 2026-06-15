@@ -377,7 +377,7 @@ class ArrowDataset(BaseDataset):
             )
             return None
 
-        return {
+        result = {
             "hidden_states": loaded_hs["hidden_states"][:, :-1].flatten(
                 1
             ),  # [seq_len, 3 * hidden_size]
@@ -387,6 +387,22 @@ class ArrowDataset(BaseDataset):
             ],  # [seq_len, hidden_size]
             "loss_mask": self.data[index]["loss_mask"],  # [seq_len]
         }
+
+        # Load K/V tensors saved by the connector (k_0, v_0, k_9, v_9, ...).
+        # Stack them into target_k_all / target_v_all: [seq_len, num_layers, nkv*hd]
+        kv_ids = sorted(
+            int(key[2:])
+            for key in loaded_hs
+            if key.startswith("k_") and key[2:].isdigit()
+        )
+        if kv_ids:
+            print("cccccc", flush=True)
+            ks = [loaded_hs[f"k_{i}"].flatten(1) for i in kv_ids]
+            vs = [loaded_hs[f"v_{i}"].flatten(1) for i in kv_ids]
+            result["target_k_all"] = torch.stack(ks, dim=1)
+            result["target_v_all"] = torch.stack(vs, dim=1)
+
+        return result
 
 
 class SampleFileDataset(BaseDataset):

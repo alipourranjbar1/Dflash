@@ -373,8 +373,9 @@ class ExtractHiddenStatesProposer:
             if name not in target_attn_layer_names
         }
         self.attn_layer_names = list(draft_attn_layers.keys())
-        assert len(draft_attn_layers) == 1, (
-            "ExtractHiddenStatesModel should have exactly one "
+        # Allow >1 when Mode-3 KV extraction adds k_{id}/v_{id} cache layers.
+        assert len(draft_attn_layers) >= 1, (
+            "ExtractHiddenStatesModel should have at least one "
             f"attention layer, found {len(draft_attn_layers)}"
         )
         self.attn_metadata_builder = self._build_attn_metadata_builder(
@@ -384,10 +385,23 @@ class ExtractHiddenStatesProposer:
     def validate_same_kv_cache_group(self, kv_cache_config: KVCacheConfig) -> None:
         """Validate all drafting layers belong to the same KV cache group
         and record the group index for common_attn_metadata selection."""
-        assert len(self.attn_layer_names) == 1
-        layer = self.attn_layer_names[0]
+        assert len(self.attn_layer_names) >= 1
+        # Use the hidden-states layer (suffix int < 10000) as the reference group.
+        # K/V extraction layers use suffix ints >= 10000 (see extract_hidden_states.py).
+        def _layer_int(name: str) -> int | None:
+            last = name.split(".")[-1]
+            try:
+                return int(last)
+            except ValueError:
+                return None
+
+        hs_layer = next(
+            (n for n in self.attn_layer_names
+             if (_layer_int(n) is not None and _layer_int(n) < 10000)),
+            self.attn_layer_names[0],
+        )
         for gid, group in enumerate(kv_cache_config.kv_cache_groups):
-            if layer in group.layer_names:
+            if hs_layer in group.layer_names:
                 self.kv_cache_gid = gid
                 return
-        raise ValueError(f"Cache-only layer {layer!r} not in any KV cache group")
+        raise ValueError(f"Cache-only layer {hs_layer!r} not in any KV cache group")

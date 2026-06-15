@@ -371,20 +371,77 @@ class ExtractHiddenStatesModel(nn.Module):
             }
         )
 
+        # Optional Mode-3: also cache K and V from real target attention layers.
+        # Layer IDs come from dflash_config.kv_target_layer_ids in the draft hf_config.
+        dflash_cfg: dict = getattr(self.hf_config, "dflash_config", None) or {}
+        self.kv_target_layer_ids: list[int] = dflash_cfg.get("kv_target_layer_ids", [])
+
+        if self.kv_target_layer_ids:
+            # Read KV head shape from the target model config.
+            target_cfg = vllm_config.model_config.hf_config
+            num_kv_heads: int = target_cfg.num_key_value_heads
+            head_dim: int = getattr(
+                target_cfg,
+                "head_dim",
+                target_cfg.hidden_size // target_cfg.num_attention_heads,
+            )
+            # Use integer keys > 9999 to satisfy extract_layer_index which requires
+            # exactly one parseable integer per "." segment:
+            #   K layers: key = 10000 + layer_id  (e.g. k at layer 9 → 10009)
+            #   V layers: key = 20000 + layer_id  (e.g. v at layer 9 → 20009)
+            for layer_id in self.kv_target_layer_ids:
+                k_key = str(10000 + layer_id)
+                v_key = str(20000 + layer_id)
+                self.cache_only_layers[k_key] = CacheOnlyAttentionLayer(
+                    num_heads=num_kv_heads,
+                    head_size=head_dim,
+                    cache_config=cache_config,
+                    prefix=maybe_prefix(prefix, f"cache_only_layers.{k_key}"),
+                )
+                self.cache_only_layers[v_key] = CacheOnlyAttentionLayer(
+                    num_heads=num_kv_heads,
+                    head_size=head_dim,
+                    cache_config=cache_config,
+                    prefix=maybe_prefix(prefix, f"cache_only_layers.{v_key}"),
+                )
+
+        # Filled by the connector's register_kv_caches after model init.
+        # Maps layer_id -> KV tensor [2, num_blocks, block_size, num_kv_heads, head_dim]
+        self._target_kv_tensors: dict[int, torch.Tensor] = {}
+
+    def set_target_kv_caches(self, caches: dict[int, torch.Tensor]) -> None:
+        """Called by the connector to provide real target attention KV cache refs."""
+        self._target_kv_tensors = caches
+
     def forward(self, hidden_states: torch.Tensor) -> None:
-        """Process and cache hidden states.
+        """Process and cache hidden states (and optionally K/V from target layers).
 
         Args:
             hidden_states: Hidden states from target model
                           shape: [num_tokens, num_hidden_states, hidden_size]
-
-        Returns:
-            Tuple of (dummy_output, dummy_output) - both unused
         """
-
-        # Call dummy attention layer to cache hidden states
-        # Output is ignored - we only care about the KV cache side effects
+        # Cache hidden states — same as before.
         _ = self.cache_only_layers[str(self.target_num_hidden_layers)](hidden_states)
+
+        # Mode-3: also cache K and V from real target attention layers.
+        if self._target_kv_tensors:
+            forward_context = get_forward_context()
+            hs_layer_name = (
+                self.cache_only_layers[str(self.target_num_hidden_layers)].layer_name
+            )
+            slot_mapping = forward_context.slot_mapping.get(hs_layer_name)
+            if slot_mapping is not None:
+                num_tokens = hidden_states.shape[0]
+                for layer_id, kv in self._target_kv_tensors.items():
+                    # kv shape: [2, num_blocks, block_size, num_kv_heads, head_dim]
+                    block_size = kv.shape[2]
+                    blk = slot_mapping // block_size
+                    off = slot_mapping % block_size
+                    # Read K and V for the current tokens
+                    k_tokens = kv[0][blk, off][:num_tokens]  # [num_tokens, nkv, hd]
+                    v_tokens = kv[1][blk, off][:num_tokens]
+                    _ = self.cache_only_layers[str(10000 + layer_id)](k_tokens)
+                    _ = self.cache_only_layers[str(20000 + layer_id)](v_tokens)
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """No weights to load for this dummy model."""

@@ -455,6 +455,7 @@ def main(args: argparse.Namespace):
         scheduler_total_steps=args.scheduler_total_steps,
         scheduler_num_cosine_cycles=args.scheduler_num_cosine_cycles,
         checkpoint_freq=args.checkpoint_freq,
+        checkpoint_steps=args.checkpoint_steps,
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
@@ -804,6 +805,13 @@ def parse_args():
         default=1.0,
         help="Save a checkpoint every N epochs. Values < 1 enable sub-epoch "
         "checkpointing (e.g. 0.5 = every half epoch).",
+    )
+    parser.add_argument(
+        "--checkpoint-steps",
+        type=int,
+        default=None,
+        help="Save a checkpoint every N global steps to a folder named by the "
+        "step (e.g. checkpoints/100000/). Independent of --checkpoint-freq.",
     )
     parser.add_argument(
         "--save-best",

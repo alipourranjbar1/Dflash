@@ -150,6 +150,7 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         # Worker-side state (set by register_kv_caches).
         self._kv_cache: torch.Tensor | None = None
+        self._kv_layer_caches: dict[str, torch.Tensor] = {}
         self._hs_group_idx: int = 0
         # Only TP rank 0 writes hidden states to disk; other TP ranks no-op.
         # Set in register_kv_caches (after distributed init).
@@ -248,22 +249,80 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         from vllm.model_executor.models.extract_hidden_states import (
             CacheOnlyAttentionLayer,
+            ExtractHiddenStatesModel,
         )
 
-        # Filter layers to only include CacheOnlyAttentionLayers
+        # Step A: give the ExtractHiddenStatesModel the real target attention
+        # KV cache tensors so it can write K/V into dedicated CacheOnly layers
+        # during forward. We match by layer name pattern "layers.{id}.".
+        extract_models = get_layers_from_vllm_config(
+            self._vllm_config, ExtractHiddenStatesModel, list(kv_caches.keys())
+        )
+        for model in extract_models.values():
+            print("bbbbbbbb", flush=True)
+            if not model.kv_target_layer_ids:
+                continue
+            target_kv: dict[int, torch.Tensor] = {}
+            for layer_id in model.kv_target_layer_ids:
+                pattern = f"layers.{layer_id}."
+                for key, tensor in kv_caches.items():
+                    # Skip CacheOnly layers — match only real attention layers
+                    if "cache_only_layers" in key:
+                        continue
+                    if pattern in key:
+                        target_kv[layer_id] = tensor
+                        break
+            model.set_target_kv_caches(target_kv)
+
+        # Step B: collect all CacheOnlyAttentionLayers (hidden states + k/v layers)
         layers = get_layers_from_vllm_config(
             self._vllm_config, CacheOnlyAttentionLayer, list(kv_caches.keys())
         )
         self.cache_layers = list(layers.keys())
-        assert len(self.cache_layers) == 1, (
-            f"Expected 1 CacheOnlyAttentionLayer, got {len(self.cache_layers)}"
+
+        # Identify layers by their integer suffix:
+        #   HS layer:  int < 10000  (e.g. 36 = target_num_hidden_layers)
+        #   K layers:  10000 <= int < 20000  → logical name "k_{layer_id}"
+        #   V layers:  20000 <= int < 30000  → logical name "v_{layer_id}"
+        def _cache_layer_int(name: str) -> int | None:
+            last = name.split(".")[-1]
+            try:
+                return int(last)
+            except ValueError:
+                return None
+
+        hs_layer = next(
+            k for k in self.cache_layers
+            if (_cache_layer_int(k) is not None and _cache_layer_int(k) < 10000)
         )
-        self._kv_cache = kv_caches[self.cache_layers[0]]
+        self._kv_cache = kv_caches[hs_layer]
+
+        # Store k/v CacheOnly caches keyed by "k_{layer_id}" / "v_{layer_id}"
+        self._kv_layer_caches: dict[str, torch.Tensor] = {}
+        for k in self.cache_layers:
+            idx = _cache_layer_int(k)
+            if idx is None or idx < 10000:
+                continue
+            if 10000 <= idx < 20000:
+                self._kv_layer_caches[f"k_{idx - 10000}"] = kv_caches[k]
+            elif 20000 <= idx < 30000:
+                self._kv_layer_caches[f"v_{idx - 20000}"] = kv_caches[k]
+
+        logger.info(
+            "[KV-DEBUG] cache_layers=%s _kv_layer_caches keys: %s",
+            self.cache_layers,
+            list(self._kv_layer_caches.keys()),
+        )
+        logger.info(
+            "[KV-INIT] register_kv_caches done id(self)=%d kv_layer_caches=%d",
+            id(self),
+            len(self._kv_layer_caches),
+        )
 
         # Find the KV cache group index for hidden states
         if self._kv_cache_config is not None:
             for i, group in enumerate(self._kv_cache_config.kv_cache_groups):
-                if self.cache_layers[0] in group.layer_names:
+                if hs_layer in group.layer_names:
                     self._hs_group_idx = i
                     break
 
@@ -353,10 +412,25 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         assert not pending.token_ids.is_cuda, (
             "Expected token_ids on CPU, got CUDA tensor"
         )
-        tensors = {
+        tensors: dict[str, torch.Tensor] = {
             "hidden_states": pinned_hs,
             "token_ids": pending.token_ids.clone(),
         }
+
+        # Also extract K and V from their dedicated CacheOnly layers and save
+        # them as "k_{layer_id}" / "v_{layer_id}" in the safetensors file.
+        logger.info(
+            "[KV-WRITE] _kv_layer_caches=%d id(self)=%d",
+            len(self._kv_layer_caches),
+            id(self),
+        )
+        if self._kv_layer_caches:
+            with torch.cuda.stream(copy_stream):
+                for key, cache in self._kv_layer_caches.items():
+                    kv_gpu = extract_from_kv_cache(cache, slot_mapping_gpu, num_tokens)
+                    pinned = torch.empty_like(kv_gpu, device="cpu", pin_memory=True)
+                    pinned.copy_(kv_gpu, non_blocking=True)
+                    tensors[key] = pinned
 
         # Submit to thread pool for disk write.
         prior = self._req_futures.get(pending.req_id)
