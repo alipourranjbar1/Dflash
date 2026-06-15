@@ -17,3 +17,6 @@ __pycache__/
 build/
 dist/
 .gitmodules
+__pycache__/
+*.pyc
+speculators/logs/
