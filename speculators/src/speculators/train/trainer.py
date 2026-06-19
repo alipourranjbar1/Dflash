@@ -50,6 +50,7 @@ class TrainerConfig(NamedTuple):
     save_best: bool = False
     hidden_states_dtype: torch.dtype = torch.bfloat16
     log_freq: int = 1
+    gradient_accumulation_steps: int = 1
 
 
 class Trainer:
@@ -159,13 +160,18 @@ class Trainer:
             self.scheduler = None
             return
 
-        # Compute defaults if None
+        # Compute defaults if None (scheduler steps count optimizer updates).
+        micro_batches_per_epoch = len(self.train_loader)
+        accum_steps = max(1, self.config.gradient_accumulation_steps)
+        optimizer_steps_per_epoch = (
+            micro_batches_per_epoch + accum_steps - 1
+        ) // accum_steps
         scheduler_warmup_steps = (
             self.config.scheduler_warmup_steps
-            or (self.config.num_epochs * len(self.train_loader)) // 100
+            or (self.config.num_epochs * optimizer_steps_per_epoch) // 100
         )
         scheduler_total_steps = self.config.scheduler_total_steps or (
-            self.config.num_epochs * len(self.train_loader)
+            self.config.num_epochs * optimizer_steps_per_epoch
         )
 
         if self.config.scheduler_type == "linear":
@@ -202,6 +208,10 @@ class Trainer:
             if self.config.checkpoint_freq < 1
             else None
         )
+        accum_steps = max(1, self.config.gradient_accumulation_steps)
+        self.opt.zero_grad(set_to_none=True)
+        pending_metrics: dict[str, float] = {}
+        micro_batches_in_accum = 0
         for local_step, batch in enumerate(train_loader, 1):
             gpu_batch = {
                 k: v.to(self.local_rank, non_blocking=True)
@@ -214,32 +224,47 @@ class Trainer:
                 **gpu_batch, **self.config.train_call_kwargs
             )
 
-            self.opt.zero_grad()
-            loss.backward()
+            (loss / accum_steps).backward()
+            micro_batches_in_accum += 1
+            for key, value in metrics.items():
+                pending_metrics[key] = pending_metrics.get(key, 0.0) + value.item()
+
+            is_accum_step = local_step % accum_steps == 0
+            is_last_micro_batch = local_step == num_steps
+            if not (is_accum_step or is_last_micro_batch):
+                continue
+
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
+            self.opt.zero_grad(set_to_none=True)
 
             current_lr = self.opt.param_groups[0]["lr"]
             if self.scheduler is not None:
                 self.scheduler.step()
 
             if self.global_step % self.config.log_freq == 0:
+                metrics_to_log = {
+                    k: v / micro_batches_in_accum for k, v in pending_metrics.items()
+                }
                 if self.is_distributed:
-                    for v in metrics.values():
-                        dist.reduce(v, dst=0, op=dist.ReduceOp.SUM)
+                    for key, value in metrics_to_log.items():
+                        tensor = torch.tensor(value, device=self.local_rank)
+                        dist.reduce(tensor, dst=0, op=dist.ReduceOp.SUM)
+                        metrics_to_log[key] = tensor.item()
 
-                metrics = {k: v.item() for k, v in metrics.items()}
                 world_size = dist.get_world_size() if self.is_distributed else 1
-                metrics = normalize_counted_metrics(metrics, world_size)
+                metrics_to_log = normalize_counted_metrics(metrics_to_log, world_size)
                 metric_logger.info(
                     {
-                        "train": metrics,
+                        "train": metrics_to_log,
                         "epoch": epoch,
                         "lr": current_lr,
                         "global_step": self.global_step,
                     },
                     extra={"step": self.global_step},
                 )
+            pending_metrics = {}
+            micro_batches_in_accum = 0
             self.global_step += 1
 
             # Global-step-based checkpointing: save to a folder named by the

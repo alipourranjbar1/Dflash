@@ -95,6 +95,7 @@ def setup_dataloader(
         lengths=dataset.approx_lengths,
         num_replicas=world_size,
         rank=local_rank,
+        max_samples_per_batch=args.batch_size,
     )
     return DataLoader(
         dataset,
@@ -299,6 +300,17 @@ def main(args: argparse.Namespace):
             "--hidden-states-dtype must be a dtype attribute of torch. e.g. `bfloat16`"
         )
     hidden_states_dtype = getattr(torch, args.hidden_states_dtype)
+    if args.batch_size is not None:
+        root_logger = logging.getLogger("speculators")
+        root_logger.info(
+            "Packing at most %d conversations per micro-batch", args.batch_size
+        )
+    if args.gradient_accumulation_steps > 1:
+        root_logger = logging.getLogger("speculators")
+        root_logger.info(
+            "Gradient accumulation: %d micro-batches per optimizer step",
+            args.gradient_accumulation_steps,
+        )
 
     if args.speculator_type == "mtp":
         verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
@@ -459,6 +471,7 @@ def main(args: argparse.Namespace):
         save_best=args.save_best,
         hidden_states_dtype=hidden_states_dtype,
         log_freq=args.log_freq,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
     trainer = Trainer(draft_model, trainer_config, train_loader, val_loader)
 
@@ -787,6 +800,25 @@ def parse_args():
     )
     # Dataloader parameters
     parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=None,
+        help=(
+            "Max conversations packed into each micro-batch. Each micro-batch still "
+            "respects --total-seq-len. Default: no limit."
+        ),
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=1,
+        help=(
+            "Number of micro-batches to accumulate before each optimizer step. "
+            "Effective micro-batches per update = batch_size (if set) * this value "
+            "per GPU."
+        ),
+    )
+    parser.add_argument(
         "--num-workers", type=int, default=12, help="Number of dataloader workers"
     )
     parser.add_argument(
@@ -827,6 +859,10 @@ def parse_args():
     parser.add_argument("--scheduler-num-cosine-cycles", type=float, default=0.5)
 
     args = parser.parse_args()
+    if args.batch_size is not None and args.batch_size < 1:
+        raise ValueError("--batch-size must be >= 1 when set")
+    if args.gradient_accumulation_steps < 1:
+        raise ValueError("--gradient-accumulation-steps must be >= 1")
     resolve_loss_fn(args.loss_fn)
     return args
 

@@ -20,3 +20,4 @@ dist/
 __pycache__/
 *.pyc
 speculators/logs/
+vllm.txt

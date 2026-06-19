@@ -45,7 +45,12 @@ class _Bin(NamedTuple):
 
 
 def _lpt_packed_batch(
-    lengths: np.ndarray, max_len: int, num_replicas: int, start_index: int, rank: int
+    lengths: np.ndarray,
+    max_len: int,
+    num_replicas: int,
+    start_index: int,
+    rank: int,
+    max_samples_per_batch: int | None = None,
 ) -> None | list:
     """
     Check if lengths can be distributed into `num_replicas` machines with at most
@@ -63,27 +68,39 @@ def _lpt_packed_batch(
     # are all assigned or we run out of space.
     local_batch = []
     heap = [_Bin(0, i) for i in range(num_replicas)]
+    rank_counts = [0] * num_replicas
 
     # sort in descending order
     indices = np.argsort(lengths)[::-1]
 
     for idx, size in zip(indices, lengths[indices], strict=True):
+        heap_rank = heap[0].rank
         new_fill = heap[0].fill + size
         if new_fill > max_len:
             # Size doesn't fit in least full batch (or any others), report failure.
             return None
+        if (
+            max_samples_per_batch is not None
+            and rank_counts[heap_rank] >= max_samples_per_batch
+        ):
+            return None
 
-        if heap[0].rank == rank:
+        if heap_rank == rank:
             # minimum bucket corresponds to the local rank -> add idx to local batch
             local_batch.append(start_index + idx)
 
+        rank_counts[heap_rank] += 1
         _ = heapreplace(heap, _Bin(new_fill, heap[0].rank))
 
     return local_batch
 
 
 def _assign_to_packed_batches(
-    lengths: np.ndarray, max_len: int, rank: int, replicas: int
+    lengths: np.ndarray,
+    max_len: int,
+    rank: int,
+    replicas: int,
+    max_samples_per_batch: int | None = None,
 ) -> list[NDArray]:
     """Distribute lengths to batches across all ranks, while respecting max_length.
     Uses a binary search + LPT algorithm.
@@ -126,7 +143,12 @@ def _assign_to_packed_batches(
         while right - left > 1 and right > replicas:
             mid = (left + right) // 2
             batch = _lpt_packed_batch(
-                lengths[ind : ind + mid], max_len, replicas, ind, rank
+                lengths[ind : ind + mid],
+                max_len,
+                replicas,
+                ind,
+                rank,
+                max_samples_per_batch,
             )
             if batch is None:
                 right = mid
@@ -135,7 +157,12 @@ def _assign_to_packed_batches(
 
         if batch is None:
             batch = _lpt_packed_batch(
-                lengths[ind : ind + left], max_len, replicas, ind, rank
+                lengths[ind : ind + left],
+                max_len,
+                replicas,
+                ind,
+                rank,
+                max_samples_per_batch,
             )
 
         ind += left
@@ -156,6 +183,7 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         rank: int,
         truncate_long_samples: bool = True,
         seed: int = 0,
+        max_samples_per_batch: int | None = None,
     ):
         """Efficient distributed packing sampler for linear attention style models
 
@@ -167,12 +195,15 @@ class MultipackDistributedBatchSamplerV2(Sampler):
             truncate_long_samples (bool, optional): Whether to truncate long samples
             (True) or drop them (False). Default is True.
             seed (int, optional): Seed for RNG, must be the same on all ranks. Default 0
+            max_samples_per_batch (int, optional): Cap on conversations packed into
+            each micro-batch. Default None (no limit).
         """
         self.num_replicas = num_replicas
         self.rank = rank
         self.seed = seed
         self.epoch = 0
         self.batch_max_length = batch_max_length
+        self.max_samples_per_batch = max_samples_per_batch
         self.lengths = np.array(lengths)
 
         self.valid_indices = np.nonzero(self.lengths <= self.batch_max_length)[0]
@@ -222,7 +253,11 @@ class MultipackDistributedBatchSamplerV2(Sampler):
         indices = rng.permutation(self.valid_indices)
 
         batches = _assign_to_packed_batches(
-            self.lengths[indices], self.batch_max_length, self.rank, self.num_replicas
+            self.lengths[indices],
+            self.batch_max_length,
+            self.rank,
+            self.num_replicas,
+            self.max_samples_per_batch,
         )
 
         # The indices in batches are relative to the shuffled self.lengths[indices]

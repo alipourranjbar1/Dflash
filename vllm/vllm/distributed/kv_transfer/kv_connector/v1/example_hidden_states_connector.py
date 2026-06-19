@@ -42,6 +42,30 @@ def extract_from_kv_cache(
     return kv_cache[slot_mapping // block_size, slot_mapping % block_size][:num_tokens]
 
 
+def extract_target_kv_tokens(
+    kv_cache: torch.Tensor,
+    slot_mapping: torch.Tensor,
+    kv_idx: int,
+    num_tokens: int,
+) -> torch.Tensor:
+    """Read K (kv_idx=0) or V (kv_idx=1) from a target FlashAttention KV cache.
+
+    Layout: [num_blocks, 2, block_size, num_kv_heads, head_dim]
+    """
+    block_size = kv_cache.shape[2]
+    blk = slot_mapping // block_size
+    off = slot_mapping % block_size
+    return kv_cache[blk, kv_idx, off][:num_tokens]
+
+
+def _cache_only_layer_int(layer_name: str) -> int | None:
+    last = layer_name.split(".")[-1]
+    try:
+        return int(last)
+    except ValueError:
+        return None
+
+
 def load_hidden_states(path: str) -> dict[str, torch.Tensor]:
     """Load hidden states written by ExampleHiddenStatesConnector.
 
@@ -151,6 +175,8 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
         # Worker-side state (set by register_kv_caches).
         self._kv_cache: torch.Tensor | None = None
         self._kv_layer_caches: dict[str, torch.Tensor] = {}
+        # layer_id -> real target attention KV cache tensor
+        self._target_kv_cache_refs: dict[int, torch.Tensor] = {}
         self._hs_group_idx: int = 0
         # Only TP rank 0 writes hidden states to disk; other TP ranks no-op.
         # Set in register_kv_caches (after distributed init).
@@ -249,58 +275,28 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
 
         from vllm.model_executor.models.extract_hidden_states import (
             CacheOnlyAttentionLayer,
-            ExtractHiddenStatesModel,
+            get_extract_hidden_states_model,
         )
 
-        # Step A: give the ExtractHiddenStatesModel the real target attention
-        # KV cache tensors so it can write K/V into dedicated CacheOnly layers
-        # during forward. We match by layer name pattern "layers.{id}.".
-        extract_models = get_layers_from_vllm_config(
-            self._vllm_config, ExtractHiddenStatesModel, list(kv_caches.keys())
-        )
-        for model in extract_models.values():
-            print("bbbbbbbb", flush=True)
-            if not model.kv_target_layer_ids:
-                continue
-            target_kv: dict[int, torch.Tensor] = {}
-            for layer_id in model.kv_target_layer_ids:
-                pattern = f"layers.{layer_id}."
-                for key, tensor in kv_caches.items():
-                    # Skip CacheOnly layers — match only real attention layers
-                    if "cache_only_layers" in key:
-                        continue
-                    if pattern in key:
-                        target_kv[layer_id] = tensor
-                        break
-            model.set_target_kv_caches(target_kv)
-
-        # Step B: collect all CacheOnlyAttentionLayers (hidden states + k/v layers)
+        # Step A: collect CacheOnlyAttentionLayers (hidden states + optional k/v layers)
         layers = get_layers_from_vllm_config(
             self._vllm_config, CacheOnlyAttentionLayer, list(kv_caches.keys())
         )
         self.cache_layers = list(layers.keys())
 
-        # Identify layers by their integer suffix:
-        #   HS layer:  int < 10000  (e.g. 36 = target_num_hidden_layers)
-        #   K layers:  10000 <= int < 20000  → logical name "k_{layer_id}"
-        #   V layers:  20000 <= int < 30000  → logical name "v_{layer_id}"
-        def _cache_layer_int(name: str) -> int | None:
-            last = name.split(".")[-1]
-            try:
-                return int(last)
-            except ValueError:
-                return None
-
         hs_layer = next(
             k for k in self.cache_layers
-            if (_cache_layer_int(k) is not None and _cache_layer_int(k) < 10000)
+            if (
+                _cache_only_layer_int(k) is not None
+                and _cache_only_layer_int(k) < 10000
+            )
         )
         self._kv_cache = kv_caches[hs_layer]
 
         # Store k/v CacheOnly caches keyed by "k_{layer_id}" / "v_{layer_id}"
         self._kv_layer_caches: dict[str, torch.Tensor] = {}
         for k in self.cache_layers:
-            idx = _cache_layer_int(k)
+            idx = _cache_only_layer_int(k)
             if idx is None or idx < 10000:
                 continue
             if 10000 <= idx < 20000:
@@ -308,15 +304,71 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             elif 20000 <= idx < 30000:
                 self._kv_layer_caches[f"v_{idx - 20000}"] = kv_caches[k]
 
+        # Step B: wire real target attention KV caches for export.
+        # Derive layer ids from registered k_* cache-only layers (reliable even
+        # when draft hf_config lookup fails).
+        kv_target_layer_ids = sorted(
+            int(name[2:])
+            for name in self._kv_layer_caches
+            if name.startswith("k_")
+        )
+        if not kv_target_layer_ids:
+            spec_config = (
+                self._vllm_config.speculative_config.draft_model_config.hf_config
+            )
+            dflash_cfg = getattr(spec_config, "dflash_config", None) or {}
+            if isinstance(dflash_cfg, dict):
+                kv_target_layer_ids = list(dflash_cfg.get("kv_target_layer_ids", []))
+            else:
+                kv_target_layer_ids = list(
+                    getattr(dflash_cfg, "kv_target_layer_ids", []) or []
+                )
+
+        target_kv: dict[int, torch.Tensor] = {}
+        if kv_target_layer_ids:
+            for layer_id in kv_target_layer_ids:
+                pattern = f"layers.{layer_id}."
+                for key, tensor in kv_caches.items():
+                    if "cache_only_layers" in key:
+                        continue
+                    if pattern in key:
+                        target_kv[layer_id] = tensor
+                        break
+            self._target_kv_cache_refs = target_kv
+            if not target_kv:
+                logger.warning(
+                    "[KV-INIT] kv_target_layer_ids=%s but matched 0 target KV "
+                    "caches. Available keys sample: %s",
+                    kv_target_layer_ids,
+                    [k for k in kv_caches if "cache_only_layers" not in k][:8],
+                )
+            else:
+                logger.info(
+                    "[KV-INIT] matched target KV caches for layers %s",
+                    sorted(target_kv.keys()),
+                )
+            extract_model = get_extract_hidden_states_model(self._vllm_config)
+            if extract_model is not None:
+                extract_model.set_target_kv_caches(target_kv)
+            elif target_kv:
+                logger.info(
+                    "[KV-INIT] draft model not in registry yet; connector will "
+                    "read target KV directly on save"
+                )
+
         logger.info(
-            "[KV-DEBUG] cache_layers=%s _kv_layer_caches keys: %s",
+            "[KV-DEBUG] cache_layers=%s _kv_layer_caches keys: %s "
+            "target_kv_refs=%s",
             self.cache_layers,
             list(self._kv_layer_caches.keys()),
+            sorted(self._target_kv_cache_refs.keys()),
         )
         logger.info(
-            "[KV-INIT] register_kv_caches done id(self)=%d kv_layer_caches=%d",
+            "[KV-INIT] register_kv_caches done id(self)=%d kv_layer_caches=%d "
+            "target_kv_refs=%d",
             id(self),
             len(self._kv_layer_caches),
+            len(self._target_kv_cache_refs),
         )
 
         # Find the KV cache group index for hidden states
@@ -417,18 +469,46 @@ class ExampleHiddenStatesConnector(KVConnectorBase_V1, SupportsHMA):
             "token_ids": pending.token_ids.clone(),
         }
 
-        # Also extract K and V from their dedicated CacheOnly layers and save
-        # them as "k_{layer_id}" / "v_{layer_id}" in the safetensors file.
+        # Save K/V: prefer reading directly from real target attention KV caches.
+        kv_source = (
+            "target_attn"
+            if self._target_kv_cache_refs
+            else ("cache_only" if self._kv_layer_caches else "none")
+        )
         logger.info(
-            "[KV-WRITE] _kv_layer_caches=%d id(self)=%d",
-            len(self._kv_layer_caches),
+            "[KV-WRITE] source=%s kv_layers=%d id(self)=%d",
+            kv_source,
+            len(self._target_kv_cache_refs or self._kv_layer_caches),
             id(self),
         )
-        if self._kv_layer_caches:
+        if self._target_kv_cache_refs:
+            with torch.cuda.stream(copy_stream):
+                for layer_id, cache in sorted(self._target_kv_cache_refs.items()):
+                    k_gpu = extract_target_kv_tokens(
+                        cache, slot_mapping_gpu, 0, num_tokens
+                    )
+                    v_gpu = extract_target_kv_tokens(
+                        cache, slot_mapping_gpu, 1, num_tokens
+                    )
+                    pinned_k = torch.empty_like(
+                        k_gpu, device="cpu", pin_memory=True
+                    )
+                    pinned_v = torch.empty_like(
+                        v_gpu, device="cpu", pin_memory=True
+                    )
+                    pinned_k.copy_(k_gpu, non_blocking=True)
+                    pinned_v.copy_(v_gpu, non_blocking=True)
+                    tensors[f"k_{layer_id}"] = pinned_k
+                    tensors[f"v_{layer_id}"] = pinned_v
+        elif self._kv_layer_caches:
             with torch.cuda.stream(copy_stream):
                 for key, cache in self._kv_layer_caches.items():
-                    kv_gpu = extract_from_kv_cache(cache, slot_mapping_gpu, num_tokens)
-                    pinned = torch.empty_like(kv_gpu, device="cpu", pin_memory=True)
+                    kv_gpu = extract_from_kv_cache(
+                        cache, slot_mapping_gpu, num_tokens
+                    )
+                    pinned = torch.empty_like(
+                        kv_gpu, device="cpu", pin_memory=True
+                    )
                     pinned.copy_(kv_gpu, non_blocking=True)
                     tensors[key] = pinned
 

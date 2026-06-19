@@ -92,6 +92,11 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
 
 
 DATASET_CONFIGS: dict[str, DatasetConfig] = {
+    "MohammadMahdi1996/perfectblend-regenerated": DatasetConfig(
+        name="perfectblend-regenerated",
+        hf_path="MohammadMahdi1996/perfectblend-regenerated",
+        split="train",
+    ),
     "sharegpt": DatasetConfig(
         name="sharegpt",
         hf_path="Aeala/ShareGPT_Vicuna_unfiltered",

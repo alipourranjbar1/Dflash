@@ -332,6 +332,27 @@ class CacheOnlyAttentionLayer(nn.Module, AttentionLayerBase):
 
 ############ ExtractHiddenStatesModel definition ##########
 
+# Draft model is not in static_forward_context (only its CacheOnlyAttentionLayer
+# children are). The connector looks up the live instance here.
+_EXTRACT_HIDDEN_STATES_MODELS: dict[int, "ExtractHiddenStatesModel"] = {}
+_EXTRACT_HIDDEN_STATES_MODELS_BY_ENGINE: dict[str, "ExtractHiddenStatesModel"] = {}
+
+
+def get_extract_hidden_states_model(
+    vllm_config: VllmConfig,
+) -> "ExtractHiddenStatesModel | None":
+    model = _EXTRACT_HIDDEN_STATES_MODELS.get(id(vllm_config))
+    if model is not None:
+        return model
+    ktc = vllm_config.kv_transfer_config
+    if ktc is not None and ktc.engine_id:
+        model = _EXTRACT_HIDDEN_STATES_MODELS_BY_ENGINE.get(ktc.engine_id)
+        if model is not None:
+            return model
+    if len(_EXTRACT_HIDDEN_STATES_MODELS) == 1:
+        return next(iter(_EXTRACT_HIDDEN_STATES_MODELS.values()))
+    return None
+
 
 class ExtractHiddenStatesModel(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
@@ -406,8 +427,28 @@ class ExtractHiddenStatesModel(nn.Module):
                 )
 
         # Filled by the connector's register_kv_caches after model init.
-        # Maps layer_id -> KV tensor [2, num_blocks, block_size, num_kv_heads, head_dim]
+        # Maps layer_id -> KV tensor [num_blocks, 2, block_size, num_kv_heads, head_dim]
         self._target_kv_tensors: dict[int, torch.Tensor] = {}
+
+        _EXTRACT_HIDDEN_STATES_MODELS[id(vllm_config)] = self
+        ktc = vllm_config.kv_transfer_config
+        if ktc is not None and ktc.engine_id:
+            _EXTRACT_HIDDEN_STATES_MODELS_BY_ENGINE[ktc.engine_id] = self
+        self._apply_pending_target_kv_from_connector()
+
+    def _apply_pending_target_kv_from_connector(self) -> None:
+        """Apply target KV refs if register_kv_caches ran before model load."""
+        from vllm.distributed.kv_transfer import (
+            get_kv_transfer_group,
+            has_kv_transfer_group,
+        )
+
+        if not has_kv_transfer_group():
+            return
+        connector = get_kv_transfer_group()
+        pending = getattr(connector, "_target_kv_cache_refs", None)
+        if pending:
+            self.set_target_kv_caches(pending)
 
     def set_target_kv_caches(self, caches: dict[int, torch.Tensor]) -> None:
         """Called by the connector to provide real target attention KV cache refs."""
@@ -433,13 +474,14 @@ class ExtractHiddenStatesModel(nn.Module):
             if slot_mapping is not None:
                 num_tokens = hidden_states.shape[0]
                 for layer_id, kv in self._target_kv_tensors.items():
-                    # kv shape: [2, num_blocks, block_size, num_kv_heads, head_dim]
+                    # Target attn kv_cache layout (FlashAttention):
+                    # [num_blocks, 2, block_size, num_kv_heads, head_dim]
                     block_size = kv.shape[2]
                     blk = slot_mapping // block_size
                     off = slot_mapping % block_size
                     # Read K and V for the current tokens
-                    k_tokens = kv[0][blk, off][:num_tokens]  # [num_tokens, nkv, hd]
-                    v_tokens = kv[1][blk, off][:num_tokens]
+                    k_tokens = kv[blk, 0, off]  # [num_tokens, nkv, hd]
+                    v_tokens = kv[blk, 1, off]
                     _ = self.cache_only_layers[str(10000 + layer_id)](k_tokens)
                     _ = self.cache_only_layers[str(20000 + layer_id)](v_tokens)
 
