@@ -20,7 +20,7 @@ from transformers import (
 )
 from transformers import __version__ as TRANSFORMERS_VERSION  # noqa: N812
 
-from speculators.data_generation.configs import DATASET_CONFIGS
+from speculators.data_generation.configs import DATASET_CONFIGS, DatasetConfig
 from speculators.data_generation.logging_utils import PipelineLogger
 from speculators.data_generation.torch_utils import set_default_torch_num_threads
 from speculators.train.vocab_mapping import save_token_frequency_distribution
@@ -39,6 +39,15 @@ ProcessorLike = PreTrainedTokenizerBase | ProcessorMixin
 
 def _visualize_sample(preprocessed: HFDataset, processor: ProcessorLike, idx: int = 0):
     """Visualize a single sample with color-coded trainable regions."""
+    for offset in range(len(preprocessed)):
+        candidate = (idx + offset) % len(preprocessed)
+        if int(preprocessed[candidate]["loss_mask"].sum().item()) > 0:
+            idx = candidate
+            break
+    else:
+        log.warning("No samples with trainable assistant tokens found to visualize")
+        return
+
     # Get preprocessed sample
     prep_sample = preprocessed[idx]
     input_ids = prep_sample["input_ids"].tolist()
@@ -92,12 +101,13 @@ def _normalize_conversation(
     normalized = []
     for i, turn in enumerate(conv):
         role = turn.get("from", turn.get("role", ""))
+        role_lower = role.lower() if isinstance(role, str) else ""
         content = turn.get("value") or turn.get("content") or ""
 
         # Map various role names to standard user/assistant
-        if role in ("human", "user"):
+        if role_lower in ("human", "user"):
             role = "user"
-        elif role in ("gpt", "assistant"):
+        elif role_lower in ("gpt", "assistant", "chatgpt", "bard", "bing", "model", "chatglm"):
             role = "assistant"
         elif role == "system":
             role = "system"
@@ -204,6 +214,16 @@ def _adapt_conv_for_vllm(normalized_conv: list[dict]):
     return [_adapt_turn_for_vllm(turn) for turn in normalized_conv]
 
 
+def _flatten_assistant_mask(mask) -> list:
+    flat: list = []
+    for item in mask:
+        if isinstance(item, (list, tuple)):
+            flat.extend(_flatten_assistant_mask(item))
+        else:
+            flat.append(item)
+    return flat
+
+
 def _supports_assistant_mask(processor: ProcessorLike) -> bool:
     """Check if processor truly supports HF assistant token mask.
 
@@ -234,7 +254,7 @@ def _supports_assistant_mask(processor: ProcessorLike) -> bool:
             return False
 
         # Verify the mask is not all zeros
-        return any(m == 1 for m in mask)
+        return any(m == 1 for m in _flatten_assistant_mask(mask))
     except (TypeError, ValueError, KeyError, AttributeError) as e:
         log.warning(f"An error occurred when trying to return assistant mask: {e}")
         return False
@@ -332,6 +352,28 @@ def _detect_assistant_pattern(processor: ProcessorLike) -> str:
     )
 
 
+def _resolve_assistant_masking_pattern(
+    processor: ProcessorLike,
+    assistant_pattern: str | Pattern[str] | None,
+) -> str | Pattern[str] | None:
+    """Pick a loss-masking strategy once per dataset build.
+
+    Returns None only when the HF assistant-token mask is verified to work.
+    Otherwise returns a regex pattern (auto-detected or user-provided).
+    """
+    if assistant_pattern is not None:
+        log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
+        return assistant_pattern
+
+    if _supports_assistant_mask(processor):
+        log.info("Using HF assistant token mask for loss masking")
+        return None
+
+    pattern = _detect_assistant_pattern(processor)
+    log.info(f"Using regex assistant pattern: {str(pattern)[:80]}...")
+    return pattern
+
+
 def _create_loss_mask_from_offsets(
     text: str,
     offsets: list[tuple[int, int]],
@@ -340,6 +382,7 @@ def _create_loss_mask_from_offsets(
     # For logging
     conv_idx: int | None = None,
     max_length: int | None = None,
+    warn_on_empty: bool = False,
 ) -> torch.Tensor:
     """Create loss mask by finding assistant response spans in formatted text."""
     loss_mask = torch.zeros(len(offsets), dtype=torch.bool)
@@ -365,10 +408,10 @@ def _create_loss_mask_from_offsets(
             if token_end > span_start_char and token_start < span_end_char:
                 loss_mask[idx] = 1
 
-    if matches_found == 0:
-        warning_msg = "No assistant response spans found in conversation"
+    if matches_found == 0 and warn_on_empty:
+        warning_msg = "No assistant response spans found in formatted text"
         if conv_idx is not None:
-            warning_msg += f" {conv_idx}"
+            warning_msg += f" (batch conversation {conv_idx})"
 
         suggestion_msg = ""
         if max_length is not None and len(offsets) == max_length:
@@ -377,7 +420,7 @@ def _create_loss_mask_from_offsets(
                 "the assistant response."
             )
 
-        log.warning(f"{warning_msg}. {suggestion_msg}")
+        log.debug(f"{warning_msg}. {suggestion_msg}")
 
     return loss_mask
 
@@ -394,7 +437,6 @@ def _get_input_ids_loss_mask(
     hf_conv = _adapt_conv_for_hf(normalized_conv, processor)
 
     if assistant_pattern is None:
-        # HF assistant token mask
         encoded_any = processor.apply_chat_template(
             hf_conv,
             tokenize=True,
@@ -404,23 +446,18 @@ def _get_input_ids_loss_mask(
         )
         encoded = cast("BatchEncoding | BatchFeature", encoded_any)
 
-        # input IDs and loss mask
         input_ids = encoded["input_ids"]
-        # HF uses 'assistant_masks' in recent versions
         mask_key = (
             "assistant_masks" if "assistant_masks" in encoded else "assistant_mask"
         )
         loss_mask = torch.tensor(encoded[mask_key], dtype=torch.long)
-
         return input_ids, loss_mask
-
-    # Fallback: regex-based detection
-    assert assistant_pattern is not None, "Assistant pattern required for fallback"
 
     processor_kwargs: dict = {
         "return_offsets_mapping": True,
         "max_length": max_length,
         "truncation": True,
+        "truncation_side": "left",
         "add_special_tokens": False,
     }
 
@@ -452,7 +489,6 @@ def _get_input_ids_loss_mask(
         formatted_text = processor.decode(input_ids)
         assert isinstance(formatted_text, str)
     else:
-        # More optimized flow for text-only processors (i.e. tokenizers)
         formatted_text = processor.apply_chat_template(
             hf_conv,
             tokenize=False,
@@ -460,8 +496,12 @@ def _get_input_ids_loss_mask(
         )
         assert isinstance(formatted_text, str)
 
-        # Tokenize and get offsets
-        encoded_any = processor(formatted_text, **processor_kwargs)
+        prev_truncation_side = processor.truncation_side
+        processor.truncation_side = "left"
+        try:
+            encoded_any = processor(formatted_text, **processor_kwargs)
+        finally:
+            processor.truncation_side = prev_truncation_side
         encoded = cast("BatchEncoding", encoded_any)
 
         input_ids = encoded["input_ids"]
@@ -490,6 +530,8 @@ def _preprocess_batch(
 
     results: dict[str, list] = {"input_ids": [], "loss_mask": [], "seq_len": []}
     conversations: list[dict] = examples.get("conversations", [])
+    skipped_no_assistant = 0
+    skipped_no_trainable = 0
 
     # MM inputs must use Chat Completions API
     if isinstance(processor, ProcessorMixin):
@@ -506,6 +548,9 @@ def _preprocess_batch(
         # Normalize to standard format with optional turn dropout
         normalized_conv = _normalize_conversation(conv, turn_dropout)
         if not normalized_conv:
+            continue
+        if not any(turn["role"] == "assistant" for turn in normalized_conv):
+            skipped_no_assistant += 1
             continue
 
         try:
@@ -529,8 +574,11 @@ def _preprocess_batch(
         )
 
         # Filtering samples out with too few valid tokens
+        num_valid_tokens = int(loss_mask.sum().item())
+        if num_valid_tokens == 0:
+            skipped_no_trainable += 1
+            continue
         if minimum_valid_tokens is not None:
-            num_valid_tokens = int(loss_mask.sum().item())
             if num_valid_tokens < minimum_valid_tokens:
                 continue
 
@@ -541,6 +589,13 @@ def _preprocess_batch(
 
         if "messages" in results:
             results["messages"].append(_adapt_conv_for_vllm(normalized_conv))
+
+    if skipped_no_assistant or skipped_no_trainable:
+        log.debug(
+            "Skipped conversations in batch: "
+            f"{skipped_no_assistant} without assistant turns, "
+            f"{skipped_no_trainable} without trainable assistant tokens"
+        )
 
     return results
 
@@ -570,15 +625,7 @@ def build_eagle3_dataset(
                      conversation
         minimum_valid_tokens: Number of tokens to consider for a valid sample
     """
-    # Detect and use provided assistant message pattern
-    if assistant_pattern is not None:
-        log.info(f"Using custom assistant pattern: {str(assistant_pattern)[:80]}...")
-    elif _supports_assistant_mask(processor):
-        assistant_pattern = None  # Signal to use HF mask in _preprocess_batch
-        log.info("Using HF assistant token mask for loss masking")
-    else:
-        assistant_pattern = _detect_assistant_pattern(processor)
-        log.info(f"Detected assistant pattern: {str(assistant_pattern)[:80]}...")
+    assistant_pattern = _resolve_assistant_masking_pattern(processor, assistant_pattern)
 
     original_cols = dataset.column_names
 
@@ -609,6 +656,18 @@ def build_eagle3_dataset(
     return dataset
 
 
+def _resolve_dataset_config(train_data_path: str) -> DatasetConfig:
+    if train_data_path in DATASET_CONFIGS:
+        return DATASET_CONFIGS[train_data_path]
+    for config in DATASET_CONFIGS.values():
+        if config.hf_path == train_data_path:
+            return config
+    raise ValueError(
+        f"Unsupported dataset: {train_data_path}. "
+        f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
+    )
+
+
 def load_raw_dataset(
     train_data_path: str,
 ) -> tuple[HFDataset, Callable[[dict], dict] | None]:
@@ -616,13 +675,7 @@ def load_raw_dataset(
     if train_data_path.endswith((".jsonl", ".json")):
         return load_dataset("json", data_files=train_data_path, split="train"), None
 
-    if train_data_path not in DATASET_CONFIGS:
-        raise ValueError(
-            f"Unsupported dataset: {train_data_path}. "
-            f"Supported: local .json/.jsonl files or {list(DATASET_CONFIGS.keys())}"
-        )
-
-    config = DATASET_CONFIGS[train_data_path]
+    config = _resolve_dataset_config(train_data_path)
     raw_dataset = load_dataset(config.hf_path, name=config.subset, split=config.split)
 
     if config.filter_fn is not None:

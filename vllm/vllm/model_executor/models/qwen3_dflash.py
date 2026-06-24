@@ -685,6 +685,23 @@ class DFlashQwen3ForCausalLM(Qwen3ForCausalLM):
             context_states, context_positions, context_slot_mapping
         )
 
+    def precompute_and_store_context_kv_from_target(
+        self,
+        target_k_layers: list[torch.Tensor],
+        target_v_layers: list[torch.Tensor],
+        context_positions: torch.Tensor,
+        context_slot_mapping: torch.Tensor | None = None,
+        skip_norm_and_rope: bool = True,
+    ) -> None:
+        """Write target K/V tensors directly into the draft KV cache."""
+        self.model.precompute_and_store_context_kv_from_target(
+            target_k_layers,
+            target_v_layers,
+            context_positions,
+            context_slot_mapping=context_slot_mapping,
+            skip_norm_and_rope=skip_norm_and_rope,
+        )
+
     def combine_hidden_states(
         self,
         hidden_states: torch.Tensor,

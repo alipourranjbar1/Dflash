@@ -104,3 +104,14 @@ def update_dflash(config_dict: dict, pre_trained_config: dict) -> None:
         "mask_token_id": config_dict["mask_token_id"],
         "target_layer_ids": [i - 1 for i in aux_layer_ids],
     }
+    # Merge optional KV-sharing settings from the checkpoint (kv_mode, kv_target_layer_ids).
+    extra_dflash = config_dict.get("dflash_config") or {}
+    for key in ("kv_mode", "kv_target_layer_ids"):
+        if key in extra_dflash:
+            pre_trained_config["dflash_config"][key] = extra_dflash[key]
+    if (
+        "kv_mode" in pre_trained_config["dflash_config"]
+        and pre_trained_config["dflash_config"]["kv_mode"] != "hidden_states"
+        and "kv_target_layer_ids" not in pre_trained_config["dflash_config"]
+    ):
+        pre_trained_config["dflash_config"]["kv_target_layer_ids"] = aux_layer_ids

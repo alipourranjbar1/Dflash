@@ -65,7 +65,12 @@ def parse_args():
         type=str,
         action="append",
         required=True,
-        help="Path to training data (same as used in preprocessing)",
+        help=(
+            "Dataset name or path. Built-in: sharegpt, ultrachat, gsm8k, "
+            "open-perfectblend, mlabonne/open-perfectblend, "
+            "MohammadMahdi1996/perfectblend-regenerated, sharegpt4v_coco. "
+            "Also accepts local .json/.jsonl files."
+        ),
     )
     parser.add_argument(
         "--seq-length",

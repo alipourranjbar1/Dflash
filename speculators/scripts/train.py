@@ -219,14 +219,29 @@ def _load_mappings(d2t_path, t2d_path, expected_draft_vocab_size: int | None):
     draft_vocab_size = d2t.shape[0]
     if expected_draft_vocab_size and expected_draft_vocab_size != draft_vocab_size:
         raise ValueError(
-            f"Explicit vocab mapping (t2d & d2t) files were provided, but don't"
-            f"match the provided --draft-vocab-size {draft_vocab_size}."
-            f"d2t.shape={d2t.shape}, dim 0 should match provided value."
+            "Explicit vocab mapping (t2d & d2t) files were provided, but don't "
+            f"match --draft-vocab-size {expected_draft_vocab_size}. "
+            f"d2t.shape={d2t.shape}; dim 0 should match the flag."
         )
     return d2t, t2d, draft_vocab_size
 
 
+def _full_draft_vocab_size(verifier_name_or_path: str) -> int:
+    verifier_config = AutoConfig.from_pretrained(verifier_name_or_path)
+    if hasattr(verifier_config, "text_config"):
+        verifier_config = verifier_config.text_config
+    return verifier_config.vocab_size
+
+
 def parse_vocab_mappings(args: argparse.Namespace):
+    verifier_vocab_size = get_target_vocab_size(None, args.verifier_name_or_path)
+    if args.draft_vocab_size is not None and args.draft_vocab_size >= verifier_vocab_size:
+        logger.info(
+            f"Using full verifier vocab ({verifier_vocab_size}) for draft; "
+            "skipping t2d/d2t mappings"
+        )
+        return None, None, verifier_vocab_size
+
     if args.d2t_path or args.t2d_path:
         if not (args.d2t_path and args.t2d_path):
             raise ValueError(
@@ -242,6 +257,12 @@ def parse_vocab_mappings(args: argparse.Namespace):
     default_d2t_path = data_path / "d2t.npy"
 
     if default_t2d_path.exists() and default_d2t_path.exists():
+        cached_d2t_size = int(np.load(default_d2t_path).shape[0])
+        if cached_d2t_size >= verifier_vocab_size:
+            logger.info(
+                "Ignoring cached full-size vocab mappings; using full verifier vocab"
+            )
+            return None, None, verifier_vocab_size
         return _load_mappings(default_d2t_path, default_t2d_path, args.draft_vocab_size)
 
     token_freq_path = args.token_freq_path or data_path / "token_freq.pt"
@@ -276,11 +297,7 @@ def parse_vocab_mappings(args: argparse.Namespace):
         f"token_freq_path='{token_freq_path}' doesn't exist or --draft-vocab-size is "
         "None. Using full verifier vocab"
     )
-    # When vocab mapping is not provided, use the full verifier vocab
-    verifier_config = AutoConfig.from_pretrained(args.verifier_name_or_path)
-    if hasattr(verifier_config, "text_config"):
-        verifier_config = verifier_config.text_config
-    return None, None, verifier_config.vocab_size
+    return None, None, _full_draft_vocab_size(args.verifier_name_or_path)
 
 
 def main(args: argparse.Namespace):

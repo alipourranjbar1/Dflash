@@ -91,11 +91,54 @@ def _normalize_sharegpt4v_coco(example: dict) -> dict:
     return {"conversations": messages}
 
 
+_ASSISTANT_ROLES = frozenset(
+    {"gpt", "assistant", "chatgpt", "bard", "bing", "model", "chatglm"}
+)
+
+
+def _filter_nonempty_conversations(example: dict) -> bool:
+    conv = example.get("conversations", [])
+    if not conv:
+        return False
+    return any((turn.get("value") or turn.get("content") or "").strip() for turn in conv)
+
+
+def _filter_has_assistant_turn(example: dict) -> bool:
+    """Drop ShareGPT rows that only contain a user prompt with no reply."""
+    conv = example.get("conversations", [])
+    if not conv:
+        return False
+    return any(
+        turn.get("from", turn.get("role", "")).lower() in _ASSISTANT_ROLES
+        and (turn.get("value") or turn.get("content") or "").strip()
+        for turn in conv
+    )
+
+
+def _filter_sharegpt_conversation(example: dict) -> bool:
+    return _filter_nonempty_conversations(example) and _filter_has_assistant_turn(
+        example
+    )
+
+
 DATASET_CONFIGS: dict[str, DatasetConfig] = {
+    "open-perfectblend": DatasetConfig(
+        name="open-perfectblend",
+        hf_path="mlabonne/open-perfectblend",
+        split="train",
+        filter_fn=_filter_sharegpt_conversation,
+    ),
+    "mlabonne/open-perfectblend": DatasetConfig(
+        name="open-perfectblend",
+        hf_path="mlabonne/open-perfectblend",
+        split="train",
+        filter_fn=_filter_sharegpt_conversation,
+    ),
     "MohammadMahdi1996/perfectblend-regenerated": DatasetConfig(
         name="perfectblend-regenerated",
         hf_path="MohammadMahdi1996/perfectblend-regenerated",
         split="train",
+        filter_fn=_filter_sharegpt_conversation,
     ),
     "sharegpt": DatasetConfig(
         name="sharegpt",

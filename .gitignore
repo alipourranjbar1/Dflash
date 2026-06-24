@@ -9,7 +9,7 @@ speculators/output
 speculators/.deps/
 speculators/build/
 speculators/dist/
-
+orthrus/
 __pycache__/
 *.pyc
 *.so

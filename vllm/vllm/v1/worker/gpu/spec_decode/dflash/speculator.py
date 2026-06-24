@@ -537,6 +537,12 @@ class DFlashSpeculator(DraftModelSpeculator):
         # directly from the target instead of being re-projected from hidden states.
         aux_kv_states: list[tuple[torch.Tensor, torch.Tensor]] | None = None,
     ) -> torch.Tensor:
+        # Drain target K/V hooks from the preceding execute_model forward.
+        # Must happen before any early return (e.g. profile_run skip_attn path),
+        # otherwise stale captures accumulate across dummy runs.
+        if aux_kv_states is None and self._kv_capture is not None:
+            aux_kv_states = self._kv_capture.pop()
+
         num_reqs = input_batch.num_reqs
         num_target_tokens = input_batch.num_tokens
         num_query_tokens = num_reqs * self.num_query_per_req
@@ -627,24 +633,34 @@ class DFlashSpeculator(DraftModelSpeculator):
         #                 target values); write directly — no further transforms.
         # ALIAS         : draft kv_cache IS the target kv_cache (aliased in
         #                 set_attn); target already wrote values — skip write step.
-
+        print("aaaaaaaaaaa")
         if self._kv_mode == _KVMode.ALIAS:
             # Nothing to precompute: the aliased kv_cache already holds the
             # target's K/V written during its own forward pass.
             pass
 
         else:
-            # Read hooked K/V for RAW_COPY / COPY modes.
-            if self._kv_capture:
-                hooked = self._kv_capture.pop()
-                if hooked is not None:
-                    aux_kv_states = hooked
+            if (
+                aux_kv_states is None
+                and self._kv_mode in (_KVMode.COPY, _KVMode.RAW_COPY)
+            ):
+                print("bbbbbbbbbbbb")
+                logger.warning_once(
+                    "DFlash %s mode: target K/V hooks returned empty; "
+                    "falling back to hidden_states projection for context KV. "
+                    "CUDA graphs on the target skip forward hooks — use "
+                    "kv_mode='alias' instead, or run the target with "
+                    "--enforce-eager.",
+                    self._kv_mode.value,
+                )
 
             if aux_kv_states is not None:
+                print("cccccccccccc")
                 target_k_layers = [kv[0][:num_target_tokens] for kv in aux_kv_states]
                 target_v_layers = [kv[1][:num_target_tokens] for kv in aux_kv_states]
 
                 if self._kv_mode == _KVMode.RAW_COPY:
+                    print("ddddddddddddd")
                     # Pre-norm, pre-RoPE: apply draft's own k-norm + RoPE.
                     self.model.precompute_and_store_context_kv_from_target(
                         target_k_layers,
@@ -655,6 +671,7 @@ class DFlashSpeculator(DraftModelSpeculator):
                     )
                 else:
                     # COPY: post-norm+RoPE — write directly, no transforms.
+                    print("eeeeeeeeeeeeee")
                     self.model.precompute_and_store_context_kv_from_target(
                         target_k_layers,
                         target_v_layers,
